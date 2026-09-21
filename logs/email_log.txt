@@ -1,0 +1,13 @@
+[2026-08-25 10:58:52] Student: 260825004 | Email: yasierelyasin@gmail.com | Status: sent
+[2026-08-25 11:08:38] Student: 260825005 | Email: castrojohnchristian043@gmail.com | Status: sent
+[2026-08-25 11:21:37] Student: 260825001 | Email: villanuevabea034@gmail.com | Status: sent
+[2026-08-25 11:35:58] Student: 260825002 | Email: margakkim83@gmail.com | Status: sent
+[2026-09-01 10:11:47] Student: 260901001 | Email: yasierelyasin@gmail.com | Status: sent
+[2026-09-01 13:53:53] Student: 260901002 | Email: villanuevajannafrancisco@gmail.com | Status: sent
+[2026-09-15 03:45:23] Student: 260915001 | Email: yasjdfbahsdf@gmail.com | Status: sent
+[2026-09-15 04:16:06] Student: 260915002 | Email: villanuevabea034@gmail.com | Status: sent
+[2026-09-16 18:42:01] Student: 260916001 | Email: maria.santos@example.com | Status: sent
+[2026-09-17 03:12:38] Student: 260917001 | Email: jose.reyes@example.com | Status: sent
+[2026-09-17 03:29:12] Student: 260917002 | Email: yasierelyasin@gmail.com | Status: sent
+[2026-09-21 14:36:28] Student: 260921001 | Email: edisonverceles4@gmail.com | Status: sent
+[2026-09-21 18:17:29] Student: 260921002 | Email: dasflkjhauds@gmail.com | Status: sent
