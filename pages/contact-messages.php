@@ -12,6 +12,7 @@ $search        = $ctrl->search();
 $counts        = $ctrl->counts();
 $unreadCount   = $ctrl->unreadCount();
 $flash         = $ctrl->flash();
+$replies       = $ctrl->replies();
 
 function h($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); }
 function timeAgo(string $ts): string {
@@ -71,9 +72,9 @@ $pageTitle       = 'Contact Messages';
                     'read'   => ['label' => 'Read',   'count' => $counts['read']],
                 ];
                 foreach ($tabs as $key => $tab):
-                    $active = $filter === $key ? ' active' : '';
+                    $activeTab = $filter === $key ? ' active' : '';
                 ?>
-                    <a class="filter-tab<?php echo $active; ?>" href="<?php echo h($ctrl->urlTab($key)); ?>">
+                    <a class="filter-tab<?php echo $activeTab; ?>" href="<?php echo h($ctrl->urlTab($key)); ?>">
                         <?php echo h($tab['label']); ?>
                         <span class="tab-count"><?php echo (int) $tab['count']; ?></span>
                     </a>
@@ -193,12 +194,61 @@ $pageTitle       = 'Contact Messages';
                             <?php echo nl2br(h($activeMessage['message'])); ?>
                         </div>
 
-                        <div class="reader-footer">
-                            <a class="btn btn-primary"
-                               href="mailto:<?php echo h($activeMessage['email']); ?>?subject=<?php echo rawurlencode('Re: ' . $activeMessage['subject']); ?>">
-                                ↩ Reply via Email
-                            </a>
+                        <!-- REPLY FORM -->
+                        <div class="reply-section">
+                            <h3 class="reply-title">↩ Reply to <?php echo h($activeMessage['name']); ?></h3>
+
+                            <form method="post" class="reply-form">
+                                <input type="hidden" name="action" value="reply">
+                                <input type="hidden" name="id" value="<?php echo (int) $activeMessage['id']; ?>">
+                                <input type="hidden" name="to_email" value="<?php echo h($activeMessage['email']); ?>">
+                                <input type="hidden" name="to_name" value="<?php echo h($activeMessage['name']); ?>">
+
+                                <label class="reply-label">To</label>
+                                <input type="text" value="<?php echo h($activeMessage['email']); ?>"
+                                       readonly class="reply-input readonly">
+
+                                <label class="reply-label">Subject</label>
+                                <input type="text" name="reply_subject"
+                                       value="Re: <?php echo h($activeMessage['subject']); ?>"
+                                       required class="reply-input">
+
+                                <label class="reply-label">Message</label>
+                                <textarea name="reply_body" rows="6" required
+                                          class="reply-input"
+                                          placeholder="Type your reply…"></textarea>
+
+                                <button type="submit" class="btn btn-primary reply-submit">
+                                    📤 Send Reply
+                                </button>
+                            </form>
                         </div>
+
+                        <!-- REPLY HISTORY -->
+                        <?php if (!empty($replies)): ?>
+                            <div class="reply-history">
+                                <h3 class="reply-history-title">📜 Reply History (<?php echo count($replies); ?>)</h3>
+                                <?php foreach ($replies as $r): ?>
+                                    <?php $ok = $r['status'] === 'sent'; ?>
+                                    <div class="reply-item" style="border-left-color:<?php echo $ok ? '#2a5c9e' : '#ef4444'; ?>;">
+                                        <div class="reply-meta">
+                                            <strong><?php echo h($r['sent_to']); ?></strong>
+                                            • <?php echo h(date('M d, Y h:i A', strtotime($r['created_at']))); ?>
+                                            • <span class="reply-status" style="color:<?php echo $ok ? '#2a5c9e' : '#ef4444'; ?>;">
+                                                <?php echo strtoupper(h($r['status'])); ?>
+                                              </span>
+                                        </div>
+                                        <div class="reply-body">
+                                            <?php echo h(mb_strimwidth($r['body'], 0, 200, '…')); ?>
+                                        </div>
+                                        <?php if (!$ok && !empty($r['error'])): ?>
+                                            <div class="reply-error">⚠ <?php echo h($r['error']); ?></div>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
+
                     <?php else: ?>
                         <div class="empty-state tall">
                             <div style="font-size:3rem;">📬</div>
@@ -329,7 +379,72 @@ $pageTitle       = 'Contact Messages';
         font-size:14px; line-height:1.7; color:#1e293b;
         white-space:pre-wrap; word-wrap:break-word; min-height:180px;
     }
-    .reader-footer { margin-top:20px; display:flex; gap:10px; }
+
+    /* --- Reply form --- */
+    .reply-section { margin-top:24px; }
+    .reply-title {
+        color:#1a3c6e;
+        font-size:16px;
+        margin:0 0 12px 0;
+    }
+    .reply-form {
+        background:#f8fbff;
+        padding:18px;
+        border-radius:10px;
+        border:1px solid #e0ecf8;
+    }
+    .reply-label {
+        display:block;
+        font-size:12px;
+        color:#5a7fa8;
+        font-weight:600;
+        margin-bottom:4px;
+    }
+    .reply-input {
+        width:100%;
+        box-sizing:border-box;
+        border:1px solid #d0e0f0;
+        border-radius:6px;
+        padding:8px 12px;
+        font-size:13px;
+        font-family:inherit;
+        margin-bottom:10px;
+        resize:vertical;
+    }
+    .reply-input:focus { border-color:#4a90d9; outline:none; }
+    .reply-input.readonly { background:#f0f5fc; }
+    .reply-submit { padding:10px 22px; font-weight:600; }
+
+    /* --- Reply history --- */
+    .reply-history { margin-top:24px; }
+    .reply-history-title {
+        color:#1a3c6e;
+        font-size:15px;
+        margin:0 0 12px 0;
+    }
+    .reply-item {
+        background:#f8fbff;
+        border-left:3px solid #2a5c9e;
+        padding:10px 14px;
+        border-radius:6px;
+        margin-bottom:10px;
+    }
+    .reply-meta {
+        font-size:12px;
+        color:#5a7fa8;
+        margin-bottom:4px;
+    }
+    .reply-status { font-weight:700; }
+    .reply-body {
+        font-size:13px;
+        color:#1e293b;
+        white-space:pre-wrap;
+    }
+    .reply-error {
+        font-size:12px;
+        color:#b91c1c;
+        margin-top:6px;
+    }
 
     .empty-state { text-align:center; padding:40px 20px; color:#5a7fa8; }
     .empty-state.tall { padding:120px 20px; }

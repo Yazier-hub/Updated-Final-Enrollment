@@ -514,27 +514,253 @@ $pageTitle = 'Application Details - ' . $fullName;
             </div>
 
             <!-- EDIT FORM -->
-            <div class="edit-form-container" id="editForm" style="display: none;">
-                <h2>✏️ Edit Application</h2>
-                <form method="POST">
-                    <input type="hidden" name="action" value="update">
-                    <input type="hidden" name="applicant_id" value="<?php echo (int) $app['applicant_id']; ?>">
+<div class="edit-form-container" id="editForm" style="display: none;">
+    <h2>✏️ Edit Application</h2>
+    <form method="POST">
+        <input type="hidden" name="action" value="update">
+        <input type="hidden" name="applicant_id" value="<?php echo (int) $app['applicant_id']; ?>">
 
-                    <!-- ... (same fields as you already have; keep them) ... -->
-                    <!-- For brevity, the fields are unchanged from your original;
-                         all reads are already null-safe in your existing markup
-                         except for a handful — but the form values will work
-                         either way because the POST handler uses ?? ''. -->
-
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-secondary" onclick="toggleEdit()">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Update Application</button>
-                    </div>
-                </form>
+        <!-- PERSONAL INFORMATION -->
+        <h3 style="color: var(--navy); margin: 15px 0 10px; font-size: 15px;">📋 Personal Information</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>First Name <span class="required">*</span></label>
+                <input type="text" name="first_name" class="form-control"
+                       value="<?php echo htmlspecialchars($app['first_name'] ?? ''); ?>" required>
+            </div>
+            <div class="form-group">
+                <label>Middle Name</label>
+                <input type="text" name="middle_name" class="form-control"
+                       value="<?php echo htmlspecialchars($app['middle_name'] ?? ''); ?>">
             </div>
         </div>
-    </div>
-</main>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Surname <span class="required">*</span></label>
+                <input type="text" name="surname" class="form-control"
+                       value="<?php echo htmlspecialchars($app['surname'] ?? ''); ?>" required>
+            </div>
+            <div class="form-group">
+                <label>Suffix</label>
+                <input type="text" name="suffix" class="form-control"
+                       value="<?php echo htmlspecialchars($app['suffix'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Admission Type</label>
+                <select name="admission_type" class="form-control">
+                    <?php
+                    $admissionTypes = ['freshmen', 'transferee', 'returnee', 'shiftee', 'second_courser'];
+                    foreach ($admissionTypes as $type):
+                    ?>
+                        <option value="<?php echo $type; ?>"
+                            <?php echo (($app['admission_type'] ?? '') === $type) ? 'selected' : ''; ?>>
+                            <?php echo ucfirst(str_replace('_', ' ', $type)); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Working Student</label>
+                <select name="working_student" class="form-control">
+                    <option value="No"  <?php echo (($app['working_student'] ?? 'No') === 'No')  ? 'selected' : ''; ?>>No</option>
+                    <option value="Yes" <?php echo (($app['working_student'] ?? '')   === 'Yes') ? 'selected' : ''; ?>>Yes</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Sex</label>
+                <select name="sex" class="form-control">
+                    <option value="">-- Select --</option>
+                    <option value="Male"   <?php echo (($app['sex'] ?? '') === 'Male')   ? 'selected' : ''; ?>>Male</option>
+                    <option value="Female" <?php echo (($app['sex'] ?? '') === 'Female') ? 'selected' : ''; ?>>Female</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Date of Birth</label>
+                <input type="date" name="date_of_birth" class="form-control"
+                       value="<?php echo htmlspecialchars($app['date_of_birth'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Age</label>
+                <input type="number" name="age" class="form-control" min="0" max="120"
+                       value="<?php echo htmlspecialchars($app['age'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Place of Birth</label>
+                <input type="text" name="place_of_birth" class="form-control"
+                       value="<?php echo htmlspecialchars($app['place_of_birth'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Civil Status</label>
+                <select name="civil_status" class="form-control">
+                    <?php
+                    $civilStatuses = ['Single', 'Married', 'Widowed', 'Separated', 'Annulled'];
+                    foreach ($civilStatuses as $cs):
+                    ?>
+                        <option value="<?php echo $cs; ?>"
+                            <?php echo (($app['civil_status'] ?? 'Single') === $cs) ? 'selected' : ''; ?>>
+                            <?php echo $cs; ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Religion</label>
+                <input type="text" name="religion" class="form-control"
+                       value="<?php echo htmlspecialchars($app['religion'] ?? ''); ?>">
+            </div>
+        </div>
+
+        <!-- CONTACT INFORMATION -->
+        <h3 style="color: var(--navy); margin: 20px 0 10px; font-size: 15px;">📞 Contact Information</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" name="email" class="form-control"
+                       value="<?php echo htmlspecialchars($app['email'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Contact Number</label>
+                <input type="text" name="contact_number" class="form-control"
+                       value="<?php echo htmlspecialchars($app['contact_number'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Facebook</label>
+                <input type="text" name="facebook" class="form-control"
+                       value="<?php echo htmlspecialchars($app['facebook'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Messenger</label>
+                <input type="text" name="messenger" class="form-control"
+                       value="<?php echo htmlspecialchars($app['messenger'] ?? ''); ?>">
+            </div>
+        </div>
+
+        <!-- ADDRESS -->
+        <h3 style="color: var(--navy); margin: 20px 0 10px; font-size: 15px;">🏠 Address</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Barangay</label>
+                <input type="text" name="address_barangay" class="form-control"
+                       value="<?php echo htmlspecialchars($app['address_barangay'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>City/Municipality</label>
+                <input type="text" name="address_city" class="form-control"
+                       value="<?php echo htmlspecialchars($app['address_city'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Province</label>
+                <input type="text" name="address_province" class="form-control"
+                       value="<?php echo htmlspecialchars($app['address_province'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Complete Address</label>
+                <input type="text" name="address_complete" class="form-control"
+                       value="<?php echo htmlspecialchars($app['address_complete'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Address (legacy / free text)</label>
+            <input type="text" name="address" class="form-control"
+                   value="<?php echo htmlspecialchars($app['address'] ?? ''); ?>">
+        </div>
+
+        <!-- PARENT / GUARDIAN -->
+        <h3 style="color: var(--navy); margin: 20px 0 10px; font-size: 15px;">👨‍👩‍👧 Parent / Guardian</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Parent Full Name</label>
+                <input type="text" name="parent_full_name" class="form-control"
+                       value="<?php echo htmlspecialchars($app['parent_full_name'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Parent Contact</label>
+                <input type="text" name="parent_contact" class="form-control"
+                       value="<?php echo htmlspecialchars($app['parent_contact'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Parent Address</label>
+            <input type="text" name="parent_address" class="form-control"
+                   value="<?php echo htmlspecialchars($app['parent_address'] ?? ''); ?>">
+        </div>
+
+        <!-- ACADEMIC INFORMATION -->
+        <h3 style="color: var(--navy); margin: 20px 0 10px; font-size: 15px;">🎓 Academic Information</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Course</label>
+                <select name="course_id" class="form-control">
+                    <option value="">-- Select Course --</option>
+                    <?php foreach ($courses as $c): ?>
+                        <option value="<?php echo (int) $c['id']; ?>"
+                            <?php echo ((int) ($app['course_id'] ?? 0) === (int) $c['id']) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($c['course_code'] ?? ''); ?>
+                            — <?php echo htmlspecialchars($c['course_name'] ?? ''); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Preferred Section</label>
+                <select name="preferred_section_id" class="form-control">
+                    <option value="">-- None --</option>
+                    <?php foreach ($availableSections as $sec): ?>
+                        <option value="<?php echo (int) $sec['section_id']; ?>"
+                            <?php echo ((int) ($app['preferred_section_id'] ?? 0) === (int) $sec['section_id']) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($sec['section_code'] ?? ''); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>School Last Attended</label>
+                <input type="text" name="school_last_attended" class="form-control"
+                       value="<?php echo htmlspecialchars($app['school_last_attended'] ?? ''); ?>">
+            </div>
+            <div class="form-group">
+                <label>Year Graduated</label>
+                <input type="number" name="year_graduated" class="form-control"
+                       min="1900" max="<?php echo date('Y') + 1; ?>"
+                       value="<?php echo htmlspecialchars($app['year_graduated'] ?? ''); ?>">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>How did you hear about us?</label>
+            <select name="how_hear" class="form-control">
+                <option value="">-- Select --</option>
+                <?php
+                $howHearOptions = ['facebook', 'friend', 'family', 'school', 'walk_in', 'other'];
+                foreach ($howHearOptions as $opt):
+                ?>
+                    <option value="<?php echo $opt; ?>"
+                        <?php echo (($app['how_hear'] ?? '') === $opt) ? 'selected' : ''; ?>>
+                        <?php echo ucfirst(str_replace('_', ' ', $opt)); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div class="form-actions">
+            <button type="button" class="btn btn-secondary" onclick="toggleEdit()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Update Application</button>
+        </div>
+    </form>
+</div>
 
 
 <?php include __DIR__ . '/../includes/footer.php'; ?>

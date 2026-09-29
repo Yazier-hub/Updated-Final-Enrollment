@@ -2,10 +2,10 @@
 // pages/enrollments.php - FULLY FIXED for `kms` schema
 //
 // FIXES:
-//   • JS uses `subject.subject_type ?? 'Lecture'` (field no longer returned by API)
-//   • All count()/iteration guarded with is_array()
-//   • addslashes() replaced with htmlspecialchars(json_encode()) for JS args
+//   • Working search for Enrolled Students (`enrolled_search` param)
+//   • Search bar + button sa isang linya (both search sections)
 //   • Null-safe reads on all $app[...] / $enroll[...] fields
+//   • is_array() guards on all controller returns
 //   • window.onclick replaced with addEventListener
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -34,20 +34,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ============================================================
-// Filters
+// FILTER PARAMETERS
 // ============================================================
-$search       = $_GET['search']     ?? '';
-$courseFilter = isset($_GET['course_id'])  ? (int) $_GET['course_id']  : '';
-$yearFilter   = isset($_GET['year_level']) ? (int) $_GET['year_level'] : '';
+$search         = $_GET['search']          ?? '';
+$enrolledSearch = $_GET['enrolled_search'] ?? '';
+$courseFilter   = isset($_GET['course_id'])  ? (int) $_GET['course_id']  : '';
+$yearFilter     = isset($_GET['year_level']) ? (int) $_GET['year_level'] : '';
 
 // ============================================================
-// Data
+// DATA
 // ============================================================
 $pendingApplicants = $controller->getPendingApplicants($search);
 if (!is_array($pendingApplicants)) $pendingApplicants = [];
 
 $enrollments = $controller->getEnrolledStudents($courseFilter, $yearFilter);
 if (!is_array($enrollments)) $enrollments = [];
+
+// ============================================================
+// ⭐ FILTER ENROLLED STUDENTS BY SEARCH TERM
+// ============================================================
+if (!empty($enrolledSearch)) {
+    $needle = strtolower(trim($enrolledSearch));
+    $enrollments = array_filter($enrollments, function ($e) use ($needle) {
+        $fullName = strtolower(trim(
+            ($e['first_name']  ?? '') . ' ' .
+            ($e['middle_name'] ?? '') . ' ' .
+            ($e['surname']     ?? '') . ' ' .
+            ($e['suffix']      ?? '')
+        ));
+        $studentNumber = strtolower($e['student_number'] ?? '');
+        $sectionCode   = strtolower($e['section_code']   ?? '');
+        $courseCode    = strtolower($e['course_code']    ?? '');
+        $email         = strtolower($e['email']          ?? '');
+
+        return strpos($fullName,      $needle) !== false
+            || strpos($studentNumber, $needle) !== false
+            || strpos($sectionCode,   $needle) !== false
+            || strpos($courseCode,    $needle) !== false
+            || strpos($email,         $needle) !== false;
+    });
+    $enrollments = array_values($enrollments);
+}
 
 $courses = $controller->getAllCourses();
 if (!is_array($courses)) $courses = [];
@@ -74,7 +101,7 @@ $currentSchoolYear = date('Y') . '-' . (date('Y') + 1);
 $nextSchoolYear    = (date('Y') + 1) . '-' . (date('Y') + 2);
 
 // ============================================================
-// Flash data
+// FLASH DATA
 // ============================================================
 $message       = $_SESSION['message']        ?? '';
 $accountCreated = $_SESSION['account_created'] ?? false;
@@ -132,7 +159,7 @@ $pageTitle = 'Enrollment Management';
 
             <!-- ACCOUNT CREDENTIALS DISPLAY -->
             <?php if ($accountCreated && $username !== '' && $password !== ''): ?>
-                <div class="alert alert-success" style="border-left:4px solid #28a745;">
+                <div class="alert alert-success" style="border-left:4px solid #2a5c9e;">
                     <div style="display:flex;align-items:flex-start;gap:15px;flex-wrap:wrap;">
                         <div style="font-size:24px;">🔐</div>
                         <div style="flex:1;">
@@ -145,14 +172,14 @@ $pageTitle = 'Enrollment Management';
                                     <span><code style="background:#e9ecef;padding:2px 8px;border-radius:3px;"><?php echo htmlspecialchars($password); ?></code></span>
                                 </div>
                                 <?php if ($isNewAccount): ?>
-                                    <small style="color:#28a745;display:block;margin-top:5px;">✅ New account created.</small>
+                                    <small style="color:#2a5c9e;display:block;margin-top:5px;">✅ New account created.</small>
                                 <?php else: ?>
-                                    <small style="color:#ffc107;display:block;margin-top:5px;">⚠️ Account already existed.</small>
+                                    <small style="color:#4a90d9;display:block;margin-top:5px;">⚠️ Account already existed.</small>
                                 <?php endif; ?>
                                 <?php if ($emailSent): ?>
-                                    <small style="color:#28a745;display:block;">📧 ✅ Credentials sent to student's email</small>
+                                    <small style="color:#2a5c9e;display:block;">📧 ✅ Credentials sent to student's email</small>
                                 <?php else: ?>
-                                    <small style="color:#dc3545;display:block;">📧 ⚠️ Email not sent. Please provide credentials manually.</small>
+                                    <small style="color:#0f2a4e;display:block;">📧 ⚠️ Email not sent. Please provide credentials manually.</small>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -195,9 +222,11 @@ $pageTitle = 'Enrollment Management';
                 </div>
             <?php endif; ?>
 
-            <!-- SEARCH -->
+            <!-- ============================================================
+                 SEARCH: PENDING APPLICANTS
+                 ============================================================ -->
             <div class="search-section">
-                <form method="GET" class="search-form">
+                <form method="GET" class="search-form" action="?page=enrollments">
                     <input type="hidden" name="page" value="enrollments">
                     <input type="text" name="search"
                            placeholder="Search applicants by name, email, or contact..."
@@ -284,7 +313,9 @@ $pageTitle = 'Enrollment Management';
                 <?php endif; ?>
             </div>
 
-            <!-- ENROLLED STUDENTS -->
+            <!-- ============================================================
+                 ENROLLED STUDENTS
+                 ============================================================ -->
             <div class="enrollments-table-container">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:15px;">
                     <h2 style="margin:0;">✅ Enrolled Students (<?php echo count($enrollments); ?>)</h2>
@@ -297,10 +328,26 @@ $pageTitle = 'Enrollment Management';
                     </div>
                 </div>
 
-                <!-- FILTERS -->
+                <!-- ============================================================
+                     FILTERS + SEARCH (Enrolled Students)
+                     ============================================================ -->
                 <div class="filters-section">
-                    <form method="GET" style="display:flex;gap:15px;flex-wrap:wrap;align-items:flex-end;width:100%;">
+                    <form method="GET" class="filters-form" action="?page=enrollments">
                         <input type="hidden" name="page" value="enrollments">
+
+                        <!-- Search Bar + Button (isang linya) -->
+                        <div class="filter-group filter-group-search">
+                            <label for="enrolled_search">Search</label>
+                            <div class="search-input-group">
+                                <input type="text"
+                                       name="enrolled_search"
+                                       id="enrolled_search"
+                                       placeholder="Search by student #, name, or section..."
+                                       value="<?php echo htmlspecialchars($enrolledSearch ?? ''); ?>"
+                                       class="enrolled-search-input">
+                                <button type="submit" class="btn btn-primary btn-search">🔍 Search</button>
+                            </div>
+                        </div>
 
                         <div class="filter-group">
                             <label for="course_filter">Course</label>
@@ -328,7 +375,7 @@ $pageTitle = 'Enrollment Management';
                         </div>
 
                         <div class="filter-actions">
-                            <?php if ($courseFilter || $yearFilter): ?>
+                            <?php if ($courseFilter || $yearFilter || !empty($enrolledSearch)): ?>
                                 <a href="?page=enrollments" class="btn btn-secondary btn-sm">Clear Filters</a>
                             <?php endif; ?>
                         </div>
@@ -384,7 +431,7 @@ $pageTitle = 'Enrollment Management';
                                         <?php echo htmlspecialchars($studentProgression->getYearLevelText($current['year_level'])); ?>
                                         <?php echo htmlspecialchars($current['semester_name'] ?? ''); ?>
                                     </span>
-                                    <br><small style="color:#666;">SY: <?php echo htmlspecialchars($currentSchoolYearDisplay); ?></small>
+                                    <br><small style="color:#5a7fa8;">SY: <?php echo htmlspecialchars($currentSchoolYearDisplay); ?></small>
                                 <?php else: ?>
                                     N/A
                                 <?php endif; ?>
@@ -396,9 +443,9 @@ $pageTitle = 'Enrollment Management';
                                         <?php echo htmlspecialchars($studentProgression->getSemesterName($next['semester'])); ?>
                                     </span>
                                     <?php if ($academicYearChanges): ?>
-                                        <br><small style="color:#dc3545;font-weight:bold;">📅 New SY: <?php echo htmlspecialchars($nextSchoolYearDisplay); ?></small>
+                                        <br><small style="color:#0f2a4e;font-weight:bold;">📅 New SY: <?php echo htmlspecialchars($nextSchoolYearDisplay); ?></small>
                                     <?php else: ?>
-                                        <br><small style="color:#666;">Same SY</small>
+                                        <br><small style="color:#5a7fa8;">Same SY</small>
                                     <?php endif; ?>
                                 <?php elseif ($next && !empty($next['is_completed'])): ?>
                                     <span class="badge badge-success">🎓 Graduated</span>
@@ -448,8 +495,8 @@ $pageTitle = 'Enrollment Management';
                 </table>
                 <?php else: ?>
                     <div class="text-center">
-                        <?php if ($courseFilter || $yearFilter): ?>
-                            No enrolled students found matching the selected filters.
+                        <?php if ($courseFilter || $yearFilter || !empty($enrolledSearch)): ?>
+                            No enrolled students found matching your filters.
                             <a href="?page=enrollments">Clear filters</a>
                         <?php else: ?>
                             No enrollments found.
@@ -472,7 +519,7 @@ $pageTitle = 'Enrollment Management';
             <p><strong>Course:</strong> <span id="applicantCourseDisplay"></span></p>
             <p><strong>Admission Type:</strong> <span id="applicantTypeDisplay"></span></p>
             <p style="color:#1a3c6e;font-weight:bold;">⚠️ Student number will be generated upon enrollment</p>
-            <p style="color:#28a745;font-weight:bold;">📚 Select subjects individually - ONE enrollment per subject</p>
+            <p style="color:#2a5c9e;font-weight:bold;">📚 Select subjects individually - ONE enrollment per subject</p>
         </div>
 
         <form method="POST" class="enrollment-form" id="enrollmentForm">
@@ -487,13 +534,13 @@ $pageTitle = 'Enrollment Management';
                 <select name="section_id" id="sectionSelect" required onchange="loadSubjectsForSection(this.value)">
                     <option value="">Choose a section</option>
                 </select>
-                <small id="sectionInfo" style="color:#666;display:block;margin-top:5px;"></small>
+                <small id="sectionInfo" style="color:#5a7fa8;display:block;margin-top:5px;"></small>
             </div>
 
             <div class="form-group">
                 <label>School Year *</label>
                 <input type="text" name="school_year" value="<?php echo htmlspecialchars($currentSchoolYear); ?>" required>
-                <small style="color:#666;">Current Academic Year: <?php echo htmlspecialchars($currentSchoolYear); ?></small>
+                <small style="color:#5a7fa8;">Current Academic Year: <?php echo htmlspecialchars($currentSchoolYear); ?></small>
             </div>
 
             <div class="subjects-section" id="subjectsSection" style="display:none;">
@@ -508,10 +555,10 @@ $pageTitle = 'Enrollment Management';
                 <div id="subjectsList">
                     <div class="loading-text">Select a section first...</div>
                 </div>
-                <p style="margin-top:10px;color:#666;font-size:13px;">
+                <p style="margin-top:10px;color:#5a7fa8;font-size:13px;">
                     Selected: <span id="selectedSubjectsCount" class="selected-count">0</span> subjects
                 </p>
-                <p style="margin-top:5px;color:#666;font-size:13px;">
+                <p style="margin-top:5px;color:#5a7fa8;font-size:13px;">
                     <span id="scheduleInfo" style="color:#1a3c6e;font-weight:bold;"></span>
                 </p>
             </div>
@@ -528,7 +575,7 @@ $pageTitle = 'Enrollment Management';
                 <div id="requirementsList">
                     <div class="loading-text">Loading requirements...</div>
                 </div>
-                <p style="margin-top:10px;color:#666;font-size:13px;">
+                <p style="margin-top:10px;color:#5a7fa8;font-size:13px;">
                     Selected: <span id="selectedRequirementsCount" class="selected-count">0</span> requirements
                 </p>
             </div>
@@ -553,8 +600,8 @@ $pageTitle = 'Enrollment Management';
             <p><strong>Student:</strong> <span id="progressionStudentName"></span></p>
             <p><strong>Next:</strong> <span id="progressionNextLevel"></span></p>
             <p><strong>Academic Year:</strong> <span id="progressionSchoolYear"></span></p>
-            <p style="color:#ffc107;font-weight:bold;">🟡 Failed subjects appear as RETAKE</p>
-            <p style="color:#dc3545;font-weight:bold;">🔴 Subjects with unmet prerequisites are BLOCKED</p>
+            <p style="color:#4a90d9;font-weight:bold;">🟡 Failed subjects appear as RETAKE</p>
+            <p style="color:#0f2a4e;font-weight:bold;">🔴 Subjects with unmet prerequisites are BLOCKED</p>
         </div>
 
         <form method="POST" class="enrollment-form" id="progressionForm">
@@ -569,14 +616,14 @@ $pageTitle = 'Enrollment Management';
                         onchange="loadProgressionSubjects(this.value)">
                     <option value="">Loading sections...</option>
                 </select>
-                <small id="progressionSectionInfo" style="color:#666;display:block;margin-top:5px;"></small>
+                <small id="progressionSectionInfo" style="color:#5a7fa8;display:block;margin-top:5px;"></small>
             </div>
 
             <div class="form-group">
                 <label>School Year *</label>
                 <input type="text" name="school_year" id="progressionSchoolYearInput"
                        value="<?php echo htmlspecialchars($currentSchoolYear); ?>" required>
-                <small id="progressionSchoolYearHint" style="color:#666;"></small>
+                <small id="progressionSchoolYearHint" style="color:#5a7fa8;"></small>
             </div>
 
             <div class="subjects-section" id="progressionSubjectsSection" style="display:none;">
@@ -596,7 +643,7 @@ $pageTitle = 'Enrollment Management';
                 <div id="progressionSubjectsList">
                     <div class="loading-text">Loading subjects...</div>
                 </div>
-                <p style="margin-top:10px;color:#666;font-size:13px;">
+                <p style="margin-top:10px;color:#5a7fa8;font-size:13px;">
                     Selected: <span id="progressionSelectedCount" class="selected-count">0</span> subjects
                 </p>
             </div>
@@ -619,7 +666,7 @@ $pageTitle = 'Enrollment Management';
 
         <div class="enroll-info">
             <p><strong>Student:</strong> <span id="archiveStudentName"></span></p>
-            <p style="color:#856404;font-weight:bold;">⚠️ Ang student ay hindi made-delete — ma-archive lang. Pwede pang i-restore.</p>
+            <p style="color:#4a90d9;font-weight:bold;">⚠️ Ang student ay hindi made-delete — ma-archive lang. Pwede pang i-restore.</p>
         </div>
 
         <form method="POST" class="enrollment-form" id="archiveForm">
@@ -662,10 +709,32 @@ $pageTitle = 'Enrollment Management';
 <?php include $basePath . '/includes/footer.php'; ?>
 
 <style>
+/* ============================================================
+   BASE
+   ============================================================ */
 .dashboard-subtitle { color: #5a7fa8; font-size: 14px; margin-bottom: 0; }
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-.stat-card { background: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(26,60,110,0.1); text-align: center; transition: transform 0.2s ease; }
-.stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(26,60,110,0.2); }
+
+/* ============================================================
+   STATS
+   ============================================================ */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+.stat-card {
+    background: white;
+    padding: 15px 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(26,60,110,0.1);
+    text-align: center;
+    transition: transform 0.2s ease;
+}
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(26,60,110,0.2);
+}
 .stat-card .number { font-size: 28px; font-weight: 700; }
 .stat-card .label { font-size: 13px; color: #5a7fa8; margin-top: 5px; }
 .stat-card.primary .number { color: #1a3c6e; }
@@ -673,24 +742,136 @@ $pageTitle = 'Enrollment Management';
 .stat-card.warning .number { color: #4a90d9; }
 .stat-card.danger .number { color: #1a3c6e; }
 
+/* ============================================================
+   ALERTS
+   ============================================================ */
 .alert { padding: 12px 20px; border-radius: 4px; margin-bottom: 20px; }
 .alert-success { background: #e8f0fe; color: #1a3c6e; border: 1px solid #b8d4e8; }
 .alert-danger { background: #dce8f5; color: #1a3c6e; border: 1px solid #a8c8e8; }
 .alert-info { background: #d1ecf1; color: #1a3c6e; border: 1px solid #b8d4e8; }
 .alert-warning { background: #e8f4fd; color: #1a3c6e; border: 1px solid #4a90d9; }
 
-.students-ready-section { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(26,60,110,0.1); }
-.students-ready-section h2 { margin-bottom: 15px; color: #1a3c6e; font-size: 18px; }
-.students-ready-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 15px; }
-.student-card { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: #f0f5fc; border-radius: 6px; border: 1px solid #d0e0f0; gap: 10px; }
-.student-card:hover { background: #e0ecf8; border-color: #1a3c6e; transform: translateY(-2px); }
-.student-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
-.student-name { font-weight: 600; color: #1a3c6e; font-size: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.student-course { font-size: 13px; color: #2a5c9e; }
-.student-email, .student-contact { font-size: 12px; color: #5a7fa8; word-break: break-all; }
-.student-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }
+/* ============================================================
+   SEARCH SECTION (Pending Applicants)
+   ⭐ Search bar + button sa isang linya
+   ============================================================ */
+.search-section {
+    background: white;
+    border-radius: 8px;
+    padding: 15px 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(26,60,110,0.1);
+}
 
-.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.search-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: nowrap;
+    width: 100%;
+}
+
+.search-form input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 42px;
+    padding: 10px 14px;
+    border: 2px solid #b8d4e8;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #1a3c6e;
+    background: white;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    box-sizing: border-box;
+    font-family: inherit;
+    outline: none;
+}
+.search-form input[type="text"]::placeholder { color: #5a7fa8; opacity: 0.7; }
+.search-form input[type="text"]:focus {
+    border-color: #1a3c6e;
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+}
+
+.search-form .btn {
+    flex: 0 0 auto;
+    height: 42px;
+    padding: 0 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+/* ============================================================
+   STUDENTS READY SECTION
+   ============================================================ */
+.students-ready-section {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(26,60,110,0.1);
+}
+.students-ready-section h2 {
+    margin-bottom: 15px;
+    color: #1a3c6e;
+    font-size: 18px;
+}
+.students-ready-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 15px;
+}
+.student-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    background: #f0f5fc;
+    border-radius: 6px;
+    border: 1px solid #d0e0f0;
+    gap: 10px;
+    transition: all 0.2s ease;
+}
+.student-card:hover {
+    background: #e0ecf8;
+    border-color: #1a3c6e;
+    transform: translateY(-2px);
+}
+.student-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.student-name {
+    font-weight: 600;
+    color: #1a3c6e;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.student-course { font-size: 13px; color: #2a5c9e; }
+.student-email,
+.student-contact { font-size: 12px; color: #5a7fa8; word-break: break-all; }
+.student-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   BADGES
+   ============================================================ */
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
 .badge-freshmen { background: #d4e8fc; color: #1a3c6e; }
 .badge-transferee { background: #cce5ff; color: #1a3c6e; }
 .badge-returnee { background: #e8f0fe; color: #2a5c9e; }
@@ -702,105 +883,536 @@ $pageTitle = 'Enrollment Management';
 .badge-warning { background: #4a90d9; color: white; }
 .badge-success { background: #2a5c9e; color: white; }
 
-.filters-section { background: white; border-radius: 8px; padding: 15px 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(26,60,110,0.1); display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end; }
-.filter-group { display: flex; flex-direction: column; gap: 5px; }
-.filter-group label { font-size: 12px; font-weight: 600; color: #5a7fa8; text-transform: uppercase; }
-.filter-group select { padding: 8px 12px; border: 2px solid #d0e0f0; border-radius: 4px; font-size: 14px; min-width: 150px; background: white; transition: border-color 0.3s ease; }
-.filter-group select:focus { border-color: #1a3c6e; outline: none; }
-.filter-actions { display: flex; gap: 10px; margin-left: auto; align-items: flex-end; }
+/* ============================================================
+   FILTERS SECTION (Enrolled Students)
+   ⭐ Search bar + button sa isang linya
+   ============================================================ */
+.filters-section {
+    background: white;
+    border-radius: 8px;
+    padding: 15px 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(26,60,110,0.1);
+}
 
-.enrollments-table-container { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(26,60,110,0.1); overflow-x: auto; }
-.enrollments-table-container h2 { margin-bottom: 15px; color: #1a3c6e; font-size: 18px; }
-.table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.table th { background: #f0f5fc; padding: 12px; text-align: left; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #5a7fa8; border-bottom: 2px solid #d0e0f0; white-space: nowrap; }
-.table td { padding: 12px; border-bottom: 1px solid #e8f0fe; vertical-align: middle; }
+.filters-form {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    width: 100%;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.filter-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #5a7fa8;
+    text-transform: uppercase;
+}
+
+.filter-group select {
+    padding: 8px 12px;
+    border: 2px solid #d0e0f0;
+    border-radius: 4px;
+    font-size: 14px;
+    min-width: 150px;
+    background: white;
+    color: #1a3c6e;
+    transition: border-color 0.3s ease;
+    font-family: inherit;
+    outline: none;
+    height: 42px;
+    box-sizing: border-box;
+}
+.filter-group select:focus { border-color: #1a3c6e; }
+
+.filter-actions {
+    display: flex;
+    gap: 10px;
+    margin-left: auto;
+    align-items: flex-end;
+}
+
+/* Search group (inside filters) */
+.filter-group-search {
+    flex: 0 0 auto;
+    min-width: 320px;
+    max-width: 100%;
+}
+
+.search-input-group {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0;
+    align-items: stretch;
+    width: 100%;
+    min-width: 320px;
+    max-width: 480px;
+}
+
+.enrolled-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 42px;
+    padding: 8px 14px;
+    border: 2px solid #d0e0f0;
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+    font-size: 14px;
+    color: #1a3c6e;
+    background: white;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    box-sizing: border-box;
+    outline: none;
+    font-family: inherit;
+}
+.enrolled-search-input::placeholder { color: #5a7fa8; opacity: 0.7; }
+.enrolled-search-input:focus {
+    border-color: #1a3c6e;
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+    z-index: 2;
+}
+
+.btn-search {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 42px;
+    padding: 0 20px;
+    border: 2px solid #1a3c6e;
+    border-left: none;
+    background: #1a3c6e;
+    color: white;
+    border-radius: 0 4px 4px 0;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+    transition: background 0.2s ease;
+    margin: 0;
+}
+.btn-search:hover {
+    background: #2a5c9e;
+    border-color: #2a5c9e;
+}
+
+/* ============================================================
+   ENROLLMENTS TABLE
+   ============================================================ */
+.enrollments-table-container {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(26,60,110,0.1);
+    overflow-x: auto;
+}
+.enrollments-table-container h2 {
+    margin-bottom: 15px;
+    color: #1a3c6e;
+    font-size: 18px;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.table th {
+    background: #f0f5fc;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #5a7fa8;
+    border-bottom: 2px solid #d0e0f0;
+    white-space: nowrap;
+}
+.table td {
+    padding: 12px;
+    border-bottom: 1px solid #e8f0fe;
+    vertical-align: middle;
+    color: #1a3c6e;
+}
+.table tbody tr { transition: background 0.2s ease; }
 .table tbody tr:hover { background: #f0f5fc; }
-.status-badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; display: inline-block; }
+
+.status-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    display: inline-block;
+}
 .status-enrolled { background: #d4e8fc; color: #1a3c6e; }
 .status-dropped { background: #dce8f5; color: #1a3c6e; }
 .status-completed { background: #d1ecf1; color: #1a3c6e; }
+
 .action-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
+
 .text-center { text-align: center; padding: 20px; color: #5a7fa8; }
 
-.btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.2s ease; text-decoration: none; display: inline-block; font-weight: 500; }
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-block;
+    font-weight: 500;
+    font-family: inherit;
+    line-height: 1.4;
+}
 .btn-sm { padding: 4px 10px; font-size: 12px; }
+
 .btn-primary { background: #1a3c6e; color: white; }
 .btn-primary:hover { background: #2a5c9e; }
+
 .btn-success { background: #2a5c9e; color: white; }
 .btn-success:hover { background: #1a3c6e; }
+
 .btn-danger { background: #1a3c6e; color: white; }
 .btn-danger:hover { background: #0f2a4e; }
+
 .btn-warning { background: #4a90d9; color: white; }
 .btn-warning:hover { background: #3a7bc8; }
+
 .btn-secondary { background: #5a7fa8; color: white; }
 .btn-secondary:hover { background: #4a6a8a; }
 .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+
 .btn-info { background: #4a90d9; color: white; }
 .btn-info:hover { background: #3a7bc8; }
 
-.modal { position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(26,60,110,0.5); overflow-y: auto; display: none; }
-.modal-content { background: white; margin: 3% auto; padding: 30px; width: 90%; max-width: 750px; border-radius: 8px; max-height: 90vh; overflow-y: auto; }
-.close { float: right; font-size: 28px; font-weight: bold; cursor: pointer; color: #a8c8e8; transition: color 0.3s; }
+/* ============================================================
+   MODALS
+   ============================================================ */
+.modal {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(26,60,110,0.5);
+    overflow-y: auto;
+    display: none;
+}
+.modal-content {
+    background: white;
+    margin: 3% auto;
+    padding: 30px;
+    width: 90%;
+    max-width: 750px;
+    border-radius: 8px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(26,60,110,0.3);
+}
+.close {
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    color: #a8c8e8;
+    transition: color 0.3s;
+    line-height: 1;
+}
 .close:hover { color: #1a3c6e; }
 
-.enroll-info { background: #f0f5fc; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+/* ============================================================
+   ENROLLMENT FORM
+   ============================================================ */
+.enroll-info {
+    background: #f0f5fc;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
 .enroll-info p { margin: 5px 0; }
-.enrollment-form .form-group { margin-bottom: 15px; }
-.enrollment-form label { display: block; margin-bottom: 5px; font-weight: 500; }
-.enrollment-form select, .enrollment-form input { width: 100%; padding: 8px 12px; border: 2px solid #d0e0f0; border-radius: 4px; font-size: 14px; transition: border-color 0.3s ease; box-sizing: border-box; }
-.enrollment-form select:focus, .enrollment-form input:focus { border-color: #1a3c6e; outline: none; }
-.form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e8f0fe; flex-wrap: wrap; }
 
-.subjects-section { background: #e8f4fd; border: 1px solid #b8d4e8; border-radius: 8px; padding: 15px; margin: 20px 0; }
-.subjects-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 5px; }
+.enrollment-form .form-group { margin-bottom: 15px; }
+.enrollment-form label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #1a3c6e;
+    font-size: 13px;
+}
+.enrollment-form select,
+.enrollment-form input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 2px solid #d0e0f0;
+    border-radius: 4px;
+    font-size: 14px;
+    color: #1a3c6e;
+    background: white;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    box-sizing: border-box;
+    font-family: inherit;
+    outline: none;
+}
+.enrollment-form select:focus,
+.enrollment-form input:focus {
+    border-color: #1a3c6e;
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #e8f0fe;
+    flex-wrap: wrap;
+}
+
+/* ============================================================
+   SUBJECTS SECTION
+   ============================================================ */
+.subjects-section {
+    background: #e8f4fd;
+    border: 1px solid #b8d4e8;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 20px 0;
+}
+.subjects-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 5px;
+}
 .subjects-header h3 { color: #1a3c6e; margin: 0; font-size: 16px; }
-.select-all-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: #1a3c6e; background: white; padding: 6px 12px; border-radius: 20px; border: 2px solid #b8d4e8; transition: all 0.3s ease; }
-.select-all-label:hover { background: #1a3c6e; color: white; border-color: #1a3c6e; }
+
+.select-all-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a3c6e;
+    background: white;
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 2px solid #b8d4e8;
+    transition: all 0.3s ease;
+}
+.select-all-label:hover {
+    background: #1a3c6e;
+    color: white;
+    border-color: #1a3c6e;
+}
 .select-all-label:hover input[type="checkbox"] { accent-color: white; }
-.select-all-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #1a3c6e; }
+.select-all-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #1a3c6e;
+}
 .select-all-label input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
 .subjects-note { color: #5a7fa8; font-size: 13px; margin-bottom: 15px; }
 
-.subject-item { display: flex; align-items: center; gap: 15px; padding: 8px 12px; background: white; border-radius: 4px; border: 1px solid #d0e0f0; margin-bottom: 5px; flex-wrap: wrap; }
+.subject-item {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 8px 12px;
+    background: white;
+    border-radius: 4px;
+    border: 1px solid #d0e0f0;
+    margin-bottom: 5px;
+    flex-wrap: wrap;
+}
 .subject-item .subject-code { font-weight: 600; color: #1a3c6e; min-width: 80px; }
 .subject-item .subject-name { flex: 1; min-width: 120px; }
 .subject-item .subject-units { color: #5a7fa8; font-size: 12px; }
-.subject-item .subject-type { color: #5a7fa8; font-size: 12px; background: #e8f0fe; padding: 2px 8px; border-radius: 10px; }
-.subject-item .schedule-days { color: #4a90d9; font-size: 11px; background: #d1ecf1; padding: 2px 8px; border-radius: 10px; }
+.subject-item .subject-type {
+    color: #5a7fa8;
+    font-size: 12px;
+    background: #e8f0fe;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.subject-item .schedule-days {
+    color: #4a90d9;
+    font-size: 11px;
+    background: #d1ecf1;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
 .subject-item .no-schedule { color: #1a3c6e; font-size: 11px; }
 .subject-item .already-enrolled { color: #2a5c9e; font-weight: bold; font-size: 12px; }
+
 .subject-item.checkbox-item { cursor: pointer; transition: background 0.2s; }
 .subject-item.checkbox-item:hover { background: #e0ecf8; }
-.subject-item.checkbox-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; accent-color: #1a3c6e; }
-.subject-item.checkbox-item input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.5; }
+.subject-item.checkbox-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    accent-color: #1a3c6e;
+}
+.subject-item.checkbox-item input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
 
-.selected-count { background: #1a3c6e; color: white; padding: 2px 10px; border-radius: 12px; font-weight: 700; font-size: 12px; }
+.selected-count {
+    background: #1a3c6e;
+    color: white;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 700;
+    font-size: 12px;
+}
 
-.requirements-section { background: #f0f5fc; border: 1px solid #d0e0f0; border-radius: 8px; padding: 15px; margin: 20px 0; }
-.requirements-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 5px; }
+/* ============================================================
+   REQUIREMENTS SECTION
+   ============================================================ */
+.requirements-section {
+    background: #f0f5fc;
+    border: 1px solid #d0e0f0;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 20px 0;
+}
+.requirements-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 5px;
+}
 .requirements-header h3 { color: #1a3c6e; margin: 0; font-size: 16px; }
 .requirements-note { color: #5a7fa8; font-size: 13px; margin-bottom: 15px; }
 .loading-text { text-align: center; padding: 20px; color: #5a7fa8; }
-.req-category { margin-bottom: 15px; }
-.req-category h4 { color: #1a3c6e; font-size: 14px; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid #d0e0f0; display: flex; justify-content: space-between; align-items: center; }
-.req-category .select-all-category { font-size: 12px; font-weight: 500; color: #1a3c6e; cursor: pointer; display: flex; align-items: center; gap: 5px; }
-.req-category .select-all-category input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; accent-color: #1a3c6e; }
-.req-items { display: grid; grid-template-columns: 1fr; gap: 8px; }
-.req-item { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: white; border-radius: 4px; border: 1px solid #d0e0f0; flex-wrap: wrap; }
-.req-item input[type="checkbox"] { width: 17px; height: 17px; cursor: pointer; flex-shrink: 0; accent-color: #1a3c6e; }
-.req-item label { flex: 1; cursor: pointer; font-weight: 400; font-size: 13px; margin: 0; min-width: 150px; }
-.mandatory-badge { color: #1a3c6e; font-weight: bold; }
-.req-note-input { flex: 1; min-width: 120px; padding: 4px 8px; border: 1px solid #d0e0f0; border-radius: 3px; font-size: 12px; }
 
+.req-category { margin-bottom: 15px; }
+.req-category h4 {
+    color: #1a3c6e;
+    font-size: 14px;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #d0e0f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.req-category .select-all-category {
+    font-size: 12px;
+    font-weight: 500;
+    color: #1a3c6e;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.req-category .select-all-category input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: #1a3c6e;
+}
+
+.req-items { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.req-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: white;
+    border-radius: 4px;
+    border: 1px solid #d0e0f0;
+    flex-wrap: wrap;
+}
+.req-item input[type="checkbox"] {
+    width: 17px;
+    height: 17px;
+    cursor: pointer;
+    flex-shrink: 0;
+    accent-color: #1a3c6e;
+}
+.req-item label {
+    flex: 1;
+    cursor: pointer;
+    font-weight: 400;
+    font-size: 13px;
+    margin: 0;
+    min-width: 150px;
+}
+.mandatory-badge { color: #1a3c6e; font-weight: bold; }
+.req-note-input {
+    flex: 1;
+    min-width: 120px;
+    padding: 4px 8px;
+    border: 1px solid #d0e0f0;
+    border-radius: 3px;
+    font-size: 12px;
+    color: #1a3c6e;
+    outline: none;
+}
+.req-note-input:focus {
+    border-color: #1a3c6e;
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
+}
+
+/* ============================================================
+   SCHEDULE MODAL
+   ============================================================ */
 .schedule-day { margin-bottom: 20px; }
-.schedule-day h3 { color: #1a3c6e; border-bottom: 2px solid #1a3c6e; padding-bottom: 5px; margin-bottom: 10px; }
-.schedule-item { display: flex; align-items: center; gap: 15px; padding: 10px 15px; background: #f0f5fc; border-radius: 4px; border-left: 4px solid #1a3c6e; margin-bottom: 8px; flex-wrap: wrap; }
+.schedule-day h3 {
+    color: #1a3c6e;
+    border-bottom: 2px solid #1a3c6e;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+.schedule-item {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 10px 15px;
+    background: #f0f5fc;
+    border-radius: 4px;
+    border-left: 4px solid #1a3c6e;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
 .schedule-item .time { font-weight: 600; color: #1a3c6e; min-width: 80px; }
 .schedule-item .subject { flex: 1; min-width: 150px; }
 .schedule-item .faculty { color: #5a7fa8; font-size: 13px; }
-.schedule-item .room { color: #5a7fa8; font-size: 13px; background: #e8f0fe; padding: 2px 10px; border-radius: 10px; }
+.schedule-item .room {
+    color: #5a7fa8;
+    font-size: 13px;
+    background: #e8f0fe;
+    padding: 2px 10px;
+    border-radius: 10px;
+}
 .no-schedule { text-align: center; padding: 30px; color: #5a7fa8; }
 
+/* ============================================================
+   SUBJECT STATUS LEGEND
+   ============================================================ */
 .subject-status-legend { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }
 .legend-item { font-size: 13px; padding: 2px 10px; border-radius: 10px; }
 .legend-item.available { background: #d4e8fc; color: #1a3c6e; }
@@ -812,6 +1424,7 @@ $pageTitle = 'Enrollment Management';
 .subject-item.blocked { border-left: 4px solid #1a3c6e; background: #e8f0fe; opacity: 0.7; }
 .subject-item.completed { border-left: 4px solid #2a5c9e; background: #e8f4fd; opacity: 0.7; }
 .subject-item.available { border-left: 4px solid #4a90d9; }
+
 .subject-status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
 .subject-status-badge.retake { background: #e8f0fe; color: #2a5c9e; }
 .subject-status-badge.blocked { background: #dce8f5; color: #1a3c6e; }
@@ -823,32 +1436,62 @@ $pageTitle = 'Enrollment Management';
 .count-retake { color: #2a5c9e; font-weight: 600; }
 .count-blocked { color: #1a3c6e; }
 .count-completed { color: #4a90d9; }
+
 .section-note { color: #5a7fa8; font-size: 13px; margin-bottom: 15px; }
-.retake-section-header { color: #2a5c9e; margin-bottom: 10px; background: #e8f0fe; padding: 8px 12px; border-radius: 6px; border-left: 4px solid #4a90d9; }
+
+.retake-section-header {
+    color: #2a5c9e;
+    margin-bottom: 10px;
+    background: #e8f0fe;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 4px solid #4a90d9;
+}
 .retake-note { color: #5a7fa8; font-size: 12px; margin-bottom: 10px; }
 
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
     .modal-content { margin: 10% auto; padding: 20px; width: 95%; }
     .students-ready-grid { grid-template-columns: 1fr; }
-    .search-form { flex-direction: column; }
-    .search-form input { width: 100%; min-width: unset; }
+
+    /* Search: panatilihing magkatabi kahit sa tablet */
+    .search-form { flex-wrap: nowrap; }
+    .search-form input[type="text"] { font-size: 13px; padding: 8px 10px; }
+    .search-form .btn { padding: 0 14px; font-size: 12px; }
+
     .student-card { flex-direction: column; align-items: stretch; }
     .student-actions { justify-content: center; }
+
     .req-item { flex-direction: column; align-items: flex-start; }
     .req-item label { min-width: unset; }
     .req-note-input { width: 100%; min-width: unset; }
-    .filters-section { flex-direction: column; align-items: stretch; }
+
+    .filters-form { flex-direction: column; align-items: stretch; }
     .filter-actions { margin-left: 0; }
+
+    .filter-group-search { min-width: 100%; }
+    .search-input-group { min-width: 0; max-width: 100%; }
+
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .table { font-size: 12px; }
     .table th, .table td { padding: 8px; }
+
     .subject-item { flex-wrap: wrap; }
     .schedule-item { flex-wrap: wrap; }
 }
+
 @media (max-width: 480px) {
     .stats-grid { grid-template-columns: 1fr; }
+
+    /* Search: panatilihing magkatabi */
+    .search-form { flex-wrap: nowrap; }
+    .search-form input[type="text"] { font-size: 12px; padding: 8px; }
+    .search-form .btn { padding: 0 10px; font-size: 11px; }
 }
 </style>
+
 <script>
 // ============================================================
 // GLOBALS
@@ -969,7 +1612,6 @@ function openEnrollmentModal(applicantId, name, course, admissionType, courseId)
     document.getElementById('enrollmentModal').style.display = 'block';
     document.body.style.overflow = 'hidden';
 
-    // ✅ Infer year level + semester from admission_type
     var yearLevel = 1;
     var semester  = 1;
 
@@ -981,7 +1623,6 @@ function openEnrollmentModal(applicantId, name, course, admissionType, courseId)
             semester  = 1;
             break;
         case 'returnee':
-            // Returnee — default sa 1st Year / 1st Sem (pwedeng i-override sa server)
             yearLevel = 1;
             semester  = 1;
             break;
@@ -1008,7 +1649,6 @@ function loadAvailableSections(courseId, yearLevel, semester) {
     select.innerHTML = '<option value="">Loading sections...</option>';
     info.textContent = 'Loading sections...';
 
-    // ✅ Pass year_level + semester + only_available=1
     var url = baseUrl + '/api/get_sections_by_course.php'
             + '?course_id='       + encodeURIComponent(courseId)
             + '&year_level='      + encodeURIComponent(yearLevel || 1)
@@ -1042,9 +1682,8 @@ function loadAvailableSections(courseId, yearLevel, semester) {
                 info.innerHTML = '✅ Found ' + data.data.length + ' section(s) for <strong>'
                     + yearText + ' - ' + semText + '</strong>. Auto-selected: <strong>'
                     + data.data[0].section_code + '</strong>';
-                info.style.color = '#28a745';
+                info.style.color = '#2a5c9e';
 
-                // ✅ AUTO-SELECT first section (pinaka-maluwag)
                 select.value = data.data[0].id;
                 loadSubjectsForSection(data.data[0].id);
             } else {
@@ -1055,7 +1694,7 @@ function loadAvailableSections(courseId, yearLevel, semester) {
                         : (yearLevel === 3) ? '3rd Year' : '4th Year')
                     + ' - ' + ((semester === 1) ? '1st Semester' : '2nd Semester')
                     + '</strong>. Kailangan mag-add ng bagong section.';
-                info.style.color = '#dc3545';
+                info.style.color = '#0f2a4e';
                 document.getElementById('subjectsSection').style.display = 'none';
             }
         })
@@ -1063,7 +1702,7 @@ function loadAvailableSections(courseId, yearLevel, semester) {
             console.error('Error loading sections:', err);
             select.innerHTML = '<option value="">Error loading sections</option>';
             info.textContent = 'Could not load sections. Please refresh and try again.';
-            info.style.color = '#dc3545';
+            info.style.color = '#0f2a4e';
         });
 }
 
@@ -1127,9 +1766,6 @@ function renderSubjectsWithCheckboxes(subjects) {
         var hasSchedule = (subject.has_schedule === true || subject.has_schedule === 1);
         var scheduleId  = subject.representative_schedule_id || null;
         var isEnrolled  = subject.is_enrolled === true;
-
-        // subject_type is NOT returned by get_subjects_for_section.php after our fix.
-        // Use ?? fallback so it renders "Lecture" without breaking.
         var typeLabel = subject.subject_type || 'Lecture';
 
         var scheduleInfoText = '';
@@ -1170,10 +1806,10 @@ function renderSubjectsWithCheckboxes(subjects) {
     var scheduleInfoEl = document.getElementById('scheduleInfo');
     if (scheduleIds.length > 0) {
         scheduleInfoEl.textContent = '📅 ' + scheduleIds.length + ' subject(s) available for enrollment.';
-        scheduleInfoEl.style.color = '#28a745';
+        scheduleInfoEl.style.color = '#2a5c9e';
     } else {
         scheduleInfoEl.textContent = '⚠️ No subjects available for enrollment.';
-        scheduleInfoEl.style.color = '#dc3545';
+        scheduleInfoEl.style.color = '#0f2a4e';
     }
 
     updateSelectAllState('#subjectsList', 'selectAllSubjects', 'input[type="checkbox"]');
@@ -1204,10 +1840,10 @@ function openProgressionEnrollment(studentId, studentName, yearLevel, semester, 
 
     if (schoolYear && schoolYear !== '<?php echo htmlspecialchars($currentSchoolYear); ?>') {
         document.getElementById('progressionSchoolYearHint').textContent = '📅 New Academic Year: ' + schoolYear;
-        document.getElementById('progressionSchoolYearHint').style.color = '#dc3545';
+        document.getElementById('progressionSchoolYearHint').style.color = '#0f2a4e';
     } else {
         document.getElementById('progressionSchoolYearHint').textContent = 'Same Academic Year: <?php echo htmlspecialchars($currentSchoolYear); ?>';
-        document.getElementById('progressionSchoolYearHint').style.color = '#28a745';
+        document.getElementById('progressionSchoolYearHint').style.color = '#2a5c9e';
     }
 
     document.getElementById('progressionSectionSelect').innerHTML = '<option value="">Loading sections...</option>';
@@ -1245,7 +1881,6 @@ function loadProgressionSections(studentId, yearLevel, semester) {
 
             var studentCourseId = data.data.student.course_id;
 
-            // ✅ Pass year_level + semester + only_available
             var url = baseUrl + '/api/get_sections_by_course.php'
                     + '?course_id='       + encodeURIComponent(studentCourseId)
                     + '&year_level='      + encodeURIComponent(yearLevel)
@@ -1281,13 +1916,11 @@ function loadProgressionSections(studentId, yearLevel, semester) {
                         info.textContent = '✅ ' + sectionData.data.length
                             + ' section(s) for ' + yearText + ' - ' + semText
                             + ' (may bakante pa)';
-                        info.style.color = '#28a745';
+                        info.style.color = '#2a5c9e';
 
-                        // ✅ AUTO-SELECT first section (pinaka-maluwag)
                         select.value = sectionData.data[0].id;
                         loadProgressionSubjects(sectionData.data[0].id);
 
-                        // ✅ Show auto-fill notice
                         var autoMsg = document.getElementById('progressionSectionInfo');
                         autoMsg.innerHTML = '✅ ' + sectionData.data.length + ' section(s) for '
                             + yearText + ' - ' + semText
@@ -1301,7 +1934,7 @@ function loadProgressionSections(studentId, yearLevel, semester) {
                                 : yearLevel === 2 ? '2nd Year'
                                 : yearLevel === 3 ? '3rd Year' : '4th Year') + '). '
                             + 'Kailangan mag-add ng bagong section.';
-                        info.style.color = '#dc3545';
+                        info.style.color = '#0f2a4e';
                         document.getElementById('progressionSubjectsSection').style.display = 'none';
                     }
                 });
@@ -1383,13 +2016,13 @@ function renderProgressionSubjectsWithCheckboxes(data) {
                 html += '<span class="subject-code">' + (subject.subject_code || 'N/A') + '</span>';
                 html += '<span class="subject-name">' + (subject.subject_name || 'Unknown');
                 if (subject.previous_grade) {
-                    html += ' <small style="color:#856404;font-size:11px;">(Previous Grade: ' + subject.previous_grade + ')</small>';
+                    html += ' <small style="color:#4a90d9;font-size:11px;">(Previous Grade: ' + subject.previous_grade + ')</small>';
                 }
                 html += '</span>';
                 html += '<span class="subject-units">' + (subject.units || 0) + ' units</span>';
                 html += '<span class="subject-status-badge retake">🔄 Retake</span>';
                 if (!canCheck) {
-                    html += '<span style="color:#dc3545;font-size:11px;">⚠️ Walang schedule sa active semester</span>';
+                    html += '<span style="color:#0f2a4e;font-size:11px;">⚠️ Walang schedule sa active semester</span>';
                 }
                 html += '</div>';
             });
@@ -1438,7 +2071,7 @@ function renderProgressionSubjectsWithCheckboxes(data) {
                 html += '<span class="subject-code">' + (subject.subject_code || 'N/A') + '</span>';
                 html += '<span class="subject-name">' + (subject.subject_name || 'Unknown');
                 if (message) {
-                    html += ' <small style="color:#666;font-size:11px;">(' + message + ')</small>';
+                    html += ' <small style="color:#5a7fa8;font-size:11px;">(' + message + ')</small>';
                 }
                 html += '</span>';
                 html += '<span class="subject-units">' + (subject.units || 0) + ' units</span>';

@@ -2,6 +2,7 @@
 // classes/ContactMessagesController.php
 
 require_once __DIR__ . '/ContactMessage.php';
+require_once __DIR__ . '/Mailer.php';
 
 class ContactMessagesController
 {
@@ -36,6 +37,7 @@ class ContactMessagesController
     public function counts(): array         { return $this->data['counts']   ?? ['all'=>0,'unread'=>0,'read'=>0]; }
     public function unreadCount(): int      { return (int) ($this->data['counts']['unread'] ?? 0); }
     public function flash(): ?array         { return $this->flash; }
+    public function replies(): array        { return $this->data['replies'] ?? []; }
 
     /* ---------------------------------------------------------
      *  URL HELPERS (used in the template)
@@ -101,11 +103,62 @@ class ContactMessagesController
                 $this->flash = ['type' => 'warning', 'text' => "{$n} message(s) deleted."];
                 break;
 
+            case 'reply':
+                $this->handleReply($id);
+                break;
+
             default:
                 $this->flash = ['type' => 'info', 'text' => 'Unknown action.'];
         }
 
         $this->redirectAfterPost();
+    }
+
+    private function handleReply(int $id): void
+    {
+        $toEmail = trim((string) ($_POST['to_email'] ?? ''));
+        $toName  = trim((string) ($_POST['to_name']  ?? ''));
+        $subject = trim((string) ($_POST['reply_subject'] ?? ''));
+        $body    = trim((string) ($_POST['reply_body'] ?? ''));
+
+        if ($id <= 0) {
+            $this->flash = ['type' => 'warning', 'text' => 'Invalid message ID.'];
+            return;
+        }
+
+        // Verify the message actually exists
+        $message = $this->model->getById($id);
+        if (!$message) {
+            $this->flash = ['type' => 'warning', 'text' => 'Message not found.'];
+            return;
+        }
+
+        // Prefer the DB email/name to prevent tampering
+        $toEmail = $message['email'] ?: $toEmail;
+        $toName  = $message['name']  ?: $toName;
+
+        // Send
+        $mailer = new Mailer();
+        $result = $mailer->sendReply($toEmail, $toName, $subject, $body);
+
+        // Log the reply attempt
+        $this->model->logReply(
+            $id,
+            $toEmail,
+            $subject,
+            $body,
+            !empty($result['success']),
+            $result['success'] ? null : ($result['message'] ?? 'Unknown error')
+        );
+
+        if (!empty($result['success'])) {
+            $this->flash = ['type' => 'success', 'text' => 'Reply sent to ' . $toEmail];
+        } else {
+            $this->flash = [
+                'type' => 'warning',
+                'text' => 'Failed: ' . ($result['message'] ?? 'Unknown error'),
+            ];
+        }
     }
 
     private function redirectAfterPost(): void
@@ -151,6 +204,7 @@ class ContactMessagesController
             'search'   => $search,
             'messages' => is_array($messages) ? $messages : [],
             'active'   => $active ?: null,
+            'replies'  => $active ? $this->model->getReplies((int) $active['id']) : [],
             'counts'   => [
                 'all'    => $this->model->count('all'),
                 'unread' => $this->model->countUnread(),

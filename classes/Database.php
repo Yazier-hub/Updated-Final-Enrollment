@@ -11,7 +11,7 @@ class Database {
     private $host     = 'localhost';
     private $username = 'root';
     private $password = '';
-    private $database = 'kms';                     // ← FIXED
+    private $database = 'lms';                     // ← FIXED
     private $port     = 3306;
     private $charset  = 'utf8mb4';
     private $options;

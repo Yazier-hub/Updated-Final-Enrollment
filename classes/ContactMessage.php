@@ -158,6 +158,10 @@ class ContactMessage
         if ($id <= 0) return false;
 
         try {
+            // Also delete replies for this message
+            $del = $this->db->prepare("DELETE FROM enr_contact_replies WHERE message_id = :id");
+            $del->execute([':id' => $id]);
+
             $stmt = $this->db->prepare(
                 "DELETE FROM enr_contact_messages WHERE id = :id"
             );
@@ -180,6 +184,12 @@ class ContactMessage
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
 
         try {
+            // Delete replies first
+            $del = $this->db->prepare(
+                "DELETE FROM enr_contact_replies WHERE message_id IN ($placeholders)"
+            );
+            $del->execute($ids);
+
             $stmt = $this->db->prepare(
                 "DELETE FROM enr_contact_messages WHERE id IN ($placeholders)"
             );
@@ -188,6 +198,55 @@ class ContactMessage
         } catch (Exception $e) {
             error_log('ContactMessage::deleteMany - ' . $e->getMessage());
             return 0;
+        }
+    }
+
+    /* ---------------------------------------------------------
+     *  REPLIES
+     * --------------------------------------------------------- */
+    public function logReply(
+        int $messageId,
+        string $to,
+        string $subject,
+        string $body,
+        bool $sent,
+        ?string $error = null
+    ): bool {
+        try {
+            $stmt = $this->db->prepare(
+                "INSERT INTO enr_contact_replies
+                    (message_id, sent_to, subject, body, status, error, created_at)
+                 VALUES (:mid, :to, :sub, :body, :status, :err, NOW())"
+            );
+            return $stmt->execute([
+                ':mid'    => $messageId,
+                ':to'     => $to,
+                ':sub'    => $subject,
+                ':body'   => $body,
+                ':status' => $sent ? 'sent' : 'failed',
+                ':err'    => $error,
+            ]);
+        } catch (Exception $e) {
+            error_log('ContactMessage::logReply - ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function getReplies(int $messageId): array
+    {
+        if ($messageId <= 0) return [];
+
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT * FROM enr_contact_replies
+                 WHERE message_id = :mid
+                 ORDER BY created_at ASC"
+            );
+            $stmt->execute([':mid' => $messageId]);
+            return $stmt->fetchAll() ?: [];
+        } catch (Exception $e) {
+            error_log('ContactMessage::getReplies - ' . $e->getMessage());
+            return [];
         }
     }
 
