@@ -1,10 +1,5 @@
 <?php
-// index.php - Main Entry Point
-
-// Start session
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require_once('../../auth/guard.php');
 
 // Error reporting for development
 error_reporting(E_ALL);
@@ -40,39 +35,15 @@ $allowed_pages = [
     'sections',
     'section-details',
     'requirements',
-    'semesters',            // ✅ ADDED
-    'school-years',         // ✅ ADDED
+    'semesters',
+    'school-years',
     'archived-students',
-    'contact-messages',             // ✅ ADDED
-    'login',
-    'logout'
+    'contact-messages',
 ];
 
 // Validate page
 if (!in_array($page, $allowed_pages)) {
     $page = 'dashboard-overview';
-}
-
-// ============================================
-// SESSION FIX - Bypass login for testing
-// ============================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['user_name'] = 'Admin User';
-    $_SESSION['user_role'] = 'admin';
-}
-
-// If login page, redirect to dashboard
-if ($page === 'login') {
-    header('Location: ?page=dashboard-overview');
-    exit;
-}
-
-// If logout page, destroy session
-if ($page === 'logout') {
-    session_destroy();
-    header('Location: ?page=login');
-    exit;
 }
 
 // ---------------------------------------------------------
@@ -93,48 +64,48 @@ class PageController
         $navItems = [
             'dashboard-overview' => [
                 'label' => 'Dashboard',
-                'icon' => 'fa-solid fa-chart-pie'
+                'icon'  => 'fa-solid fa-chart-pie'
             ],
             'applications' => [
                 'label' => 'Applications',
-                'icon' => 'fa-solid fa-file-pen'
+                'icon'  => 'fa-solid fa-file-pen'
             ],
             'enrollments' => [
                 'label' => 'Enrollments',
-                'icon' => 'fa-solid fa-user-graduate'
+                'icon'  => 'fa-solid fa-user-graduate'
             ],
             'students' => [
                 'label' => 'Students',
-                'icon' => 'fa-solid fa-users'
+                'icon'  => 'fa-solid fa-users'
             ],
             'courses' => [
                 'label' => 'Courses',
-                'icon' => 'fa-solid fa-book'
+                'icon'  => 'fa-solid fa-book'
             ],
             'sections' => [
                 'label' => 'Sections',
-                'icon' => 'fa-solid fa-layer-group'
+                'icon'  => 'fa-solid fa-layer-group'
             ],
             'requirements' => [
                 'label' => 'Requirements',
-                'icon' => 'fa-solid fa-list-check'
+                'icon'  => 'fa-solid fa-list-check'
             ],
-            'semesters' => [                                // ✅ ADDED
+            'semesters' => [
                 'label' => 'Semester Management',
-                'icon' => 'fa-solid fa-calendar-days'
+                'icon'  => 'fa-solid fa-calendar-days'
             ],
-            'archived-students' => [                        // ✅ ADDED
+            'archived-students' => [
                 'label' => 'Archived Students',
-                'icon' => 'fa-solid fa-box-archive'
+                'icon'  => 'fa-solid fa-box-archive'
             ],
-            'contact-messages' => [                         // ✅ ADDED
+            'contact-messages' => [
                 'label' => 'Contact Messages',
-                'icon' => 'fa-solid fa-envelope'
+                'icon'  => 'fa-solid fa-envelope'
             ]
         ];
 
         foreach ($navItems as $pageKey => $item) {
-            $isActive = ($this->currentPage === $pageKey);
+            $isActive    = ($this->currentPage === $pageKey);
             $activeClass = $isActive ? 'active-menu-link' : 'menu-link';
 
             echo '
@@ -161,24 +132,22 @@ $pageController = new PageController($page);
 // Set page title before loading header
 $pageTitles = [
     'dashboard-overview' => 'Dashboard Overview',
-    'applications' => 'Applications',
-    'application-details' => 'Application Details',
-    'application-edit' => 'Edit Application',
-    'students' => 'Students',
-    'student-details' => 'Student Details',
-    'student-edit' => 'Edit Student',
-    'student-subjects' => 'Student Subjects',
-    'enrollments' => 'Enrollments',
-    'courses' => 'Courses',
-    'sections' => 'Sections',
-    'section-details' => 'Section Details',
-    'requirements' => 'Requirements',
-    'semesters' => 'Semester Management',           // ✅ ADDED
-    'school-years' => 'School Years',               // ✅ ADDED
-    'archived-students' => 'Archived Students',     // ✅ ADDED
-    'contact-messages' => 'Contact Messages',        // ✅ ADDED
-    'login' => 'Login',
-    'logout' => 'Logout'
+    'applications'       => 'Applications',
+    'application-details'=> 'Application Details',
+    'application-edit'   => 'Edit Application',
+    'students'           => 'Students',
+    'student-details'    => 'Student Details',
+    'student-edit'       => 'Edit Student',
+    'student-subjects'   => 'Student Subjects',
+    'enrollments'        => 'Enrollments',
+    'courses'            => 'Courses',
+    'sections'           => 'Sections',
+    'section-details'    => 'Section Details',
+    'requirements'       => 'Requirements',
+    'semesters'          => 'Semester Management',
+    'school-years'       => 'School Years',
+    'archived-students'  => 'Archived Students',
+    'contact-messages'   => 'Contact Messages',
 ];
 
 $pageTitle = $pageTitles[$page] ?? 'Bestlink College Enrollment System';
@@ -197,5 +166,3 @@ if (!file_exists($pageFile)) {
 
 // Include the page content
 include $pageFile;
-
-?>

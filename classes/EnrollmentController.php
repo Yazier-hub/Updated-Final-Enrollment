@@ -6,7 +6,9 @@
 //   • handleEnroll() now calls PrerequisiteValidator
 //   • handleBulkEnroll() now calls PrerequisiteValidator
 //   • ajaxGetAvailableSubjectsWithStatus() now blocks subjects with failed prereqs
-//   • New helper: studentFailedSubject()
+//   • studentFailedSubject() uses final_grade + remarks='failed' (enum, lowercase)
+//   • searchEnrollments() uses e.semester_id (not the non-existent e.semester)
+//   • searchEnrollments() exposes esem.name AS enrollment_semester for display
 
 require_once 'Enrollment.php';
 require_once 'Student.php';
@@ -165,7 +167,6 @@ class EnrollmentController {
         $next           = $this->enrollment->getStudentNextProgression($studentId);
         $enrollmentData = $this->enrollment->getStudentEnrollmentData($studentId);
 
-        // NEW: Include can_progress info
         $canProgress = $this->progression->canProgress($studentId);
 
         echo json_encode([
@@ -228,7 +229,6 @@ class EnrollmentController {
                                 );
 
                                 if (!$prereqCheck['valid'] && strpos($prereqCheck['message'], 'Prerequisites') !== false) {
-                                    // Blocked dahil may failed prerequisite
                                     $subject['status']  = SubjectStatusManager::STATUS_BLOCKED;
                                     $subject['message'] = $prereqCheck['message'];
 
@@ -639,7 +639,6 @@ class EnrollmentController {
 
     /* ============================================================
        MAIN ENROLL HANDLER (NEW STUDENT)
-       PATCH: Added PrerequisiteValidator check
     ============================================================ */
 
     private function handleEnroll() {
@@ -699,7 +698,7 @@ class EnrollmentController {
         $studentModel    = new Student();
         $existingStudent = $studentModel->findByApplicantId($applicantId);
 
-        // ---- PATCH: Prerequisite check for existing student ----
+        // ---- Prerequisite check for existing student ----
         if ($existingStudent) {
             $prereqResult = $this->prerequisiteValidator->validateScheduleEnrollments(
                 (int) $existingStudent['student_id'],
@@ -768,7 +767,6 @@ class EnrollmentController {
 
     /* ============================================================
        PROGRESSION ENROLL HANDLER
-       PATCH: Added PrerequisiteValidator check
     ============================================================ */
 
     private function handleProgressionEnroll() {
@@ -816,7 +814,7 @@ class EnrollmentController {
             return;
         }
 
-        // ---- PATCH STEP 1: Prerequisite check (IT101 → IT102 etc.) ----
+        // ---- STEP 1: Prerequisite check ----
         $prereqResult = $this->prerequisiteValidator->validateScheduleEnrollments(
             $studentId,
             $scheduleIds
@@ -827,14 +825,14 @@ class EnrollmentController {
             return;
         }
 
-        // ---- PATCH STEP 2: Duplicate / general validation ----
+        // ---- STEP 2: Duplicate / general validation ----
         $validationResult = $this->enrollment->validateEnrollment($studentId, $scheduleIds);
         if (!$validationResult['valid']) {
             $_SESSION['message'] = '❌ ' . $validationResult['message'];
             return;
         }
 
-        // ---- PATCH STEP 3: Actual enrollment ----
+        // ---- STEP 3: Actual enrollment ----
         $result = $this->enrollment->enrollStudentWithSubjects(
             $studentId,
             $sectionId,
@@ -962,7 +960,6 @@ class EnrollmentController {
 
     /* ============================================================
        BULK ENROLL HANDLER
-       PATCH: Added PrerequisiteValidator check
     ============================================================ */
 
     private function handleBulkEnroll() {
@@ -997,7 +994,7 @@ class EnrollmentController {
         foreach ($_POST['ids'] as $applicantId) {
             $applicantId = (int) $applicantId;
 
-            // ---- PATCH: Prerequisite check per applicant ----
+            // ---- Prerequisite check per applicant ----
             $existingStudent = $this->student->findByApplicantId($applicantId);
             if ($existingStudent) {
                 $prereqResult = $this->prerequisiteValidator->validateScheduleEnrollments(
@@ -1072,11 +1069,11 @@ class EnrollmentController {
 
     /**
      * Check if student failed a subject previously.
-     * Used to mark subjects as "Retake" sa UI.
+     * Uses `final_grade` + `remarks='failed'` (lowercase enum).
      */
     private function studentFailedSubject($studentId, $subjectId) {
         try {
-            $sql = "SELECT g.grade, g.remarks
+            $sql = "SELECT g.final_grade, g.remarks
                     FROM rgr_grades g
                     INNER JOIN enr_enrollments e ON g.enrollment_id = e.enrollment_id
                     INNER JOIN cc_schedule s    ON e.schedule_id = s.id
@@ -1091,13 +1088,16 @@ class EnrollmentController {
 
             if (!$row) return false;
 
-            // Failed kung grade <= 75 OR remarks = 'Failed'
-            if ($row['grade'] !== null && (float) $row['grade'] <= 75) {
+            // Primary: enum remarks = 'failed'
+            if (($row['remarks'] ?? '') === 'failed') {
                 return true;
             }
-            if (($row['remarks'] ?? '') === 'Failed') {
+
+            // Fallback: final_grade <= 75
+            if ($row['final_grade'] !== null && (float) $row['final_grade'] <= 75) {
                 return true;
             }
+
             return false;
         } catch (Exception $e) {
             error_log('studentFailedSubject() error: ' . $e->getMessage());
@@ -1143,10 +1143,6 @@ class EnrollmentController {
         }
     }
 
-    /**
-     * FIX: cc_sections has NO `semester` / `school_year` columns.
-     * JOIN to rgr_semesters / rgr_school_years and alias their `name`.
-     */
     public function getEnrolledStudents($courseId = null, $yearLevel = null) {
         try {
             $sql = "SELECT
@@ -1279,7 +1275,6 @@ class EnrollmentController {
                 ];
             }
 
-            // enr_applicants has no year_level / semester — derive from preferred_section_id
             $yearLevel = '1st Year';
             $semester  = '1st Semester';
 
@@ -1352,6 +1347,7 @@ class EnrollmentController {
 
     /* ============================================================
        SEARCH ENROLLMENTS
+       FIX: `e.semester` → `e.semester_id`; add esem JOIN
     ============================================================ */
 
     public function searchEnrollments($keyword) {
@@ -1361,7 +1357,7 @@ class EnrollmentController {
                         e.student_id,
                         e.section_id,
                         e.school_year,
-                        e.semester,
+                        e.semester_id,
                         e.schedule_id,
                         e.enrollment_status,
                         e.enrollment_date,
@@ -1377,8 +1373,9 @@ class EnrollmentController {
                         rs.units,
                         sec.section_code,
                         sec.grade_level,
-                        sem.name AS section_semester,
-                        sy.name  AS school_year_name,
+                        sem.name  AS section_semester,
+                        esem.name AS enrollment_semester,
+                        sy.name   AS school_year_name,
                         c.code as course_code,
                         c.name as course_name,
                         cs.day_of_week,
@@ -1391,7 +1388,8 @@ class EnrollmentController {
                     JOIN rgr_subjects rs ON cs.subject_id = rs.id
                     JOIN cc_sections sec ON e.section_id = sec.id
                     JOIN rgr_courses c ON sec.program_id = c.id
-                    LEFT JOIN rgr_semesters sem ON sec.semester_id = sem.id
+                    LEFT JOIN rgr_semesters sem  ON sec.semester_id = sem.id
+                    LEFT JOIN rgr_semesters esem ON e.semester_id   = esem.id
                     LEFT JOIN rgr_school_years sy ON sec.school_year_id = sy.id
                     WHERE e.enrollment_status = 'enrolled'
                       AND (a.first_name LIKE ?

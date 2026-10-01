@@ -2,11 +2,12 @@
 // pages/applications.php - FULLY FIXED for `kms` schema
 //
 // FIXES:
-//   • deleteOldApplications() no longer runs on every page load
-//     (moved behind a once-per-day session flag)
+//   • N/A is now SELECTABLE via per-field checkbox for optional text fields
+//   • year_graduated: text input accepting "2024-2025" format
+//   • date_of_birth and place_of_birth optional (matches DB nullable)
+//   • Age auto-calculation supports both new + edit modals
+//   • deleteOldApplications() runs at most once per day
 //   • $applications guaranteed to be an array before count()
-//   • htmlspecialchars(null) warnings avoided with ?? ''
-//   • message alert check uses str_starts_with (PHP 8) with fallback
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -17,41 +18,30 @@ require_once 'classes/Course.php';
 require_once 'classes/Student.php';
 require_once 'classes/ApplicationController.php';
 
-// Initialize controller
 $applicationController = new ApplicationController();
 
-// ============================================================
-// Run cleanup AT MOST once per day (not on every page load)
-// ============================================================
+// Cleanup once per day
 $today = date('Y-m-d');
 if (($_SESSION['last_app_cleanup'] ?? '') !== $today) {
     $applicationController->deleteOldApplications();
     $_SESSION['last_app_cleanup'] = $today;
 }
 
-// ============================================================
 // AJAX
-// ============================================================
 if (isset($_GET['ajax'])) {
     $applicationController->handleAjaxRequest();
     exit;
 }
 
-// ============================================================
 // POST
-// ============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $applicationController->handlePostRequest();
-    // handlePostRequest() redirects and exits
 }
 
-// ============================================================
-// Filter parameters
-// ============================================================
+// Filters
 $status = $_GET['status'] ?? 'pending';
 $search = $_GET['search'] ?? '';
 
-// Prevent empty-search redirect loops
 if (isset($_GET['search']) && $_GET['search'] === '') {
     $params = $_GET;
     unset($params['search']);
@@ -62,21 +52,16 @@ if (isset($_GET['search']) && $_GET['search'] === '') {
     }
 }
 
-// ============================================================
 // Load applications
-// ============================================================
 if ($status === 'all') {
     $applications = $applicationController->getAllApplications();
 } else {
     $applications = $applicationController->getApplicationsByStatus($status);
 }
 
-// Belt-and-braces guard
-if (!is_array($applications)) {
-    $applications = [];
-}
+if (!is_array($applications)) $applications = [];
 
-// Filter by search
+// Search filter
 if ($search !== '') {
     $needle = strtolower($search);
     $applications = array_filter($applications, function ($app) use ($needle) {
@@ -87,20 +72,88 @@ if ($search !== '') {
     });
 }
 
-// Courses + stats
 $courses = $applicationController->getCourses();
-if (!is_array($courses)) {
-    $courses = [];
-}
+if (!is_array($courses)) $courses = [];
 
 $stats = $applicationController->getStats();
 
-// Flash message
 $message = $_SESSION['message'] ?? '';
 unset($_SESSION['message']);
 
-// Page title
 $pageTitle = 'Applications Management';
+
+// Helper: render a value or "N/A"
+if (!function_exists('na')) {
+    function na($value, $fallback = 'N/A') {
+        if ($value === null) return $fallback;
+        if (is_string($value) && trim($value) === '') return $fallback;
+        return $value;
+    }
+}
+
+/**
+ * Render a text input with a selectable "N/A" checkbox next to it.
+ *
+ * @param string $name         Input name attribute
+ * @param string $id           Input id (optional, for JS targeting)
+ * @param string $label        Field label
+ * @param bool   $required     Whether the field is required
+ * @param string $placeholder  Placeholder text
+ * @param string $value        Current value (from DB when editing)
+ * @param string $type         Input type: 'text' | 'textarea'
+ * @param string $helpText     Optional help text below input
+ * @param bool   $hasPattern   Whether to include the YYYY-YYYY pattern
+ */
+function naInput($name, $id = '', $label = '', $required = false,
+                 $placeholder = '', $value = '', $type = 'text',
+                 $helpText = '', $hasPattern = false) {
+    $idAttr         = $id !== '' ? "id=\"{$id}\"" : '';
+    $requiredAttr   = $required ? ' required' : '';
+    $requiredMark   = $required ? ' <span class="required">*</span>' : '';
+    $isNA           = is_string($value) && strtoupper(trim($value)) === 'N/A';
+    $displayValue   = $isNA ? 'N/A' : $value;
+    $readonlyAttr   = $isNA ? ' readonly' : '';
+    $checkedAttr    = $isNA ? ' checked' : '';
+    $patternAttr    = $hasPattern
+        ? ' pattern="\d{4}(\s*-\s*\d{4})?" title="Format: YYYY-YYYY (e.g., 2024-2025)"'
+        : '';
+
+    $inputId = $id !== '' ? $id : $name;
+
+    echo '<div class="form-group na-group">';
+    echo "<label for=\"{$inputId}\">{$label}{$requiredMark}</label>";
+
+    echo '<div class="na-input-wrap">';
+
+    if ($type === 'textarea') {
+        echo "<textarea name=\"{$name}\" {$idAttr} rows=\"2\"{$requiredAttr}{$readonlyAttr} "
+           . "placeholder=\"" . htmlspecialchars($placeholder) . "\" "
+           . "class=\"na-input\" data-na-toggle=\"na_chk_{$inputId}\">"
+           . htmlspecialchars($displayValue)
+           . "</textarea>";
+    } else {
+        echo "<input type=\"text\" name=\"{$name}\" {$idAttr}{$requiredAttr}{$readonlyAttr}"
+           . "{$patternAttr} "
+           . "placeholder=\"" . htmlspecialchars($placeholder) . "\" "
+           . "value=\"" . htmlspecialchars($displayValue) . "\" "
+           . "class=\"na-input\" data-na-toggle=\"na_chk_{$inputId}\">";
+    }
+
+    echo '<label class="na-checkbox" for="na_chk_' . htmlspecialchars($inputId) . '" '
+       . 'title="Check to set this field to N/A">'
+       . "<input type=\"checkbox\" id=\"na_chk_{$inputId}\" "
+       . "onchange=\"toggleNA('{$inputId}', this)\"{$checkedAttr}>"
+       . '<span>N/A</span>'
+       . '</label>';
+
+    echo '</div>';
+
+    if ($helpText !== '') {
+        echo '<div class="help-text">' . htmlspecialchars($helpText) . '</div>';
+    }
+
+    echo '</div>';
+}
 ?>
 
 <?php include __DIR__ . '/../includes/header.php'; ?>
@@ -140,18 +193,14 @@ $pageTitle = 'Applications Management';
                 <strong>💡 How it works:</strong> Submit an application, then go to
                 <a href="?page=enrollments">Enrollments</a> to enroll the student.
                 <br>
-                <small>✅ <strong>NEW:</strong> Each subject enrollment creates a separate
-                enrollment record linked to a specific schedule. Once converted, the
-                application moves to the "Converted" tab.</small>
+                <small>✅ <strong>NEW:</strong> Optional fields have an <strong>N/A</strong>
+                checkbox — tick it to explicitly set the field to "N/A".</small>
             </div>
 
             <!-- MESSAGES -->
             <?php if ($message !== ''): ?>
-                <?php
-                    $isSuccess = (strpos($message, '✅') !== false);
-                    $alertClass = $isSuccess ? 'success' : 'danger';
-                ?>
-                <div class="alert alert-<?php echo $alertClass; ?>">
+                <?php $isSuccess = (strpos($message, '✅') !== false); ?>
+                <div class="alert alert-<?php echo $isSuccess ? 'success' : 'danger'; ?>">
                     <?php echo htmlspecialchars($message); ?>
                 </div>
             <?php endif; ?>
@@ -235,18 +284,23 @@ $pageTitle = 'Applications Management';
                                 </td>
                                 <td>
                                     <strong>
-                                        <?php echo htmlspecialchars(
-                                            ($app['first_name'] ?? '') . ' ' . ($app['surname'] ?? '')
-                                        ); ?>
+                                        <?php
+                                            $firstName = na($app['first_name'] ?? '', '');
+                                            $surname   = na($app['surname']    ?? '', '');
+                                            echo htmlspecialchars(trim($firstName . ' ' . $surname));
+                                        ?>
                                     </strong>
-                                    <?php if (!empty($app['suffix'])): ?>
-                                        <small>(<?php echo htmlspecialchars($app['suffix']); ?>)</small>
+                                    <?php
+                                        $suffix = trim((string) ($app['suffix'] ?? ''));
+                                        if ($suffix !== '' && strtoupper($suffix) !== 'N/A'):
+                                    ?>
+                                        <small>(<?php echo htmlspecialchars($suffix); ?>)</small>
                                     <?php endif; ?>
                                 </td>
-                                <td><?php echo htmlspecialchars($app['course_code'] ?? 'N/A'); ?></td>
+                                <td><?php echo htmlspecialchars(na($app['course_code'] ?? '')); ?></td>
                                 <td>
-                                    <?php echo htmlspecialchars($app['contact_number'] ?? ''); ?><br>
-                                    <small><?php echo htmlspecialchars($app['email'] ?? ''); ?></small>
+                                    <?php echo htmlspecialchars(na($app['contact_number'] ?? '')); ?><br>
+                                    <small><?php echo htmlspecialchars(na($app['email'] ?? '')); ?></small>
                                 </td>
                                 <td>
                                     <?php
@@ -269,9 +323,7 @@ $pageTitle = 'Applications Management';
                                 <td>
                                     <?php
                                         $submitted = $app['submitted_at'] ?? null;
-                                        echo $submitted
-                                            ? date('M d, Y', strtotime($submitted))
-                                            : 'N/A';
+                                        echo $submitted ? date('M d, Y', strtotime($submitted)) : 'N/A';
                                     ?>
                                 </td>
                                 <td>
@@ -330,7 +382,7 @@ $pageTitle = 'Applications Management';
                             No <?php echo $status === 'all' ? '' : htmlspecialchars(ucfirst($status)); ?>
                             applications found.
                             <?php if ($status === 'pending'): ?>
-                                <a href="#" onclick="showNewApplication()">Create one now</a>
+                                <a href="#" onclick="showNewApplication(); return false;">Create one now</a>
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>
@@ -357,18 +409,24 @@ $pageTitle = 'Applications Management';
                         <label>First Name <span class="required">*</span></label>
                         <input type="text" name="first_name" required>
                     </div>
-                    <div class="form-group">
-                        <label>Middle Name</label>
-                        <input type="text" name="middle_name">
-                    </div>
+
+                    <?php naInput(
+                        'middle_name', 'new_middle_name',
+                        'Middle Name', false,
+                        'Type or click N/A', '', 'text'
+                    ); ?>
+
                     <div class="form-group">
                         <label>Surname <span class="required">*</span></label>
                         <input type="text" name="surname" required>
                     </div>
-                    <div class="form-group">
-                        <label>Suffix</label>
-                        <input type="text" name="suffix" placeholder="e.g., Jr., Sr., III">
-                    </div>
+
+                    <?php naInput(
+                        'suffix', 'new_suffix',
+                        'Suffix', false,
+                        'e.g., Jr., Sr., III', '', 'text'
+                    ); ?>
+
                     <div class="form-group">
                         <label>Admission Type <span class="required">*</span></label>
                         <select name="admission_type" required>
@@ -405,21 +463,25 @@ $pageTitle = 'Applications Management';
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Date of Birth <span class="required">*</span></label>
-                        <input type="date" name="date_of_birth" required onchange="calculateAge()">
+                        <label>Date of Birth</label>
+                        <input type="date" name="date_of_birth" onchange="calculateAge('new')">
                     </div>
                     <div class="form-group">
                         <label>Age</label>
-                        <input type="number" name="age" id="age" readonly>
+                        <input type="number" name="age" id="new_age" readonly>
                     </div>
-                    <div class="form-group">
-                        <label>Place of Birth <span class="required">*</span></label>
-                        <input type="text" name="place_of_birth" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Religion</label>
-                        <input type="text" name="religion">
-                    </div>
+
+                    <?php naInput(
+                        'place_of_birth', 'new_place_of_birth',
+                        'Place of Birth', false,
+                        'Type or click N/A', '', 'text'
+                    ); ?>
+
+                    <?php naInput(
+                        'religion', 'new_religion',
+                        'Religion', false,
+                        'Type or click N/A', '', 'text'
+                    ); ?>
                 </div>
             </div>
 
@@ -438,10 +500,12 @@ $pageTitle = 'Applications Management';
                         <label>Province <span class="required">*</span></label>
                         <input type="text" name="address_province" required>
                     </div>
-                    <div class="form-group full-width">
-                        <label>Complete Address</label>
-                        <textarea name="address_complete" rows="2"></textarea>
-                    </div>
+
+                    <?php naInput(
+                        'address_complete', 'new_address_complete',
+                        'Complete Address', false,
+                        'Type or click N/A', '', 'textarea'
+                    ); ?>
                 </div>
             </div>
 
@@ -457,14 +521,18 @@ $pageTitle = 'Applications Management';
                         <input type="text" name="contact_number" required placeholder="09xxxxxxxxx">
                         <div class="help-text">Format: 09xxxxxxxxx</div>
                     </div>
-                    <div class="form-group">
-                        <label>Facebook Account</label>
-                        <input type="text" name="facebook" placeholder="Facebook username or URL">
-                    </div>
-                    <div class="form-group">
-                        <label>Messenger</label>
-                        <input type="text" name="messenger" placeholder="Messenger account">
-                    </div>
+
+                    <?php naInput(
+                        'facebook', 'new_facebook',
+                        'Facebook Account', false,
+                        'Type or click N/A', '', 'text'
+                    ); ?>
+
+                    <?php naInput(
+                        'messenger', 'new_messenger',
+                        'Messenger', false,
+                        'Type or click N/A', '', 'text'
+                    ); ?>
                 </div>
             </div>
 
@@ -475,11 +543,14 @@ $pageTitle = 'Applications Management';
                         <label>School Last Attended <span class="required">*</span></label>
                         <input type="text" name="school_last_attended" required>
                     </div>
-                    <div class="form-group">
-                        <label>Year Graduated <span class="required">*</span></label>
-                        <input type="number" name="year_graduated"
-                               min="1990" max="<?php echo date('Y'); ?>" required>
-                    </div>
+
+                    <?php naInput(
+                        'year_graduated', 'new_year_graduated',
+                        'Year Graduated', false,
+                        'e.g., 2024-2025', '', 'text',
+                        'Format: YYYY-YYYY or click N/A', true
+                    ); ?>
+
                     <div class="form-group full-width">
                         <label>How did you hear about us?</label>
                         <select name="how_hear">
@@ -489,6 +560,7 @@ $pageTitle = 'Applications Management';
                             <option value="school">School</option>
                             <option value="advertisement">Advertisement</option>
                             <option value="other">Other</option>
+                            <option value="N/A">N/A</option>
                         </select>
                     </div>
                 </div>
@@ -501,14 +573,18 @@ $pageTitle = 'Applications Management';
                         <label>Parent/Guardian Full Name <span class="required">*</span></label>
                         <input type="text" name="parent_full_name" required>
                     </div>
-                    <div class="form-group">
-                        <label>Parent Contact Number</label>
-                        <input type="text" name="parent_contact" placeholder="09xxxxxxxxx">
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Parent Address</label>
-                        <textarea name="parent_address" rows="2"></textarea>
-                    </div>
+
+                    <?php naInput(
+                        'parent_contact', 'new_parent_contact',
+                        'Parent Contact Number', false,
+                        '09xxxxxxxxx', '', 'text'
+                    ); ?>
+
+                    <?php naInput(
+                        'parent_address', 'new_parent_address',
+                        'Parent Address', false,
+                        'Type or click N/A', '', 'textarea'
+                    ); ?>
                 </div>
             </div>
 
@@ -556,18 +632,24 @@ $pageTitle = 'Applications Management';
                         <label>First Name <span class="required">*</span></label>
                         <input type="text" name="first_name" id="edit_first_name" required>
                     </div>
-                    <div class="form-group">
-                        <label>Middle Name</label>
-                        <input type="text" name="middle_name" id="edit_middle_name">
-                    </div>
+
+                    <?php naInput(
+                        'middle_name', 'edit_middle_name',
+                        'Middle Name', false,
+                        'Type or click N/A'
+                    ); ?>
+
                     <div class="form-group">
                         <label>Surname <span class="required">*</span></label>
                         <input type="text" name="surname" id="edit_surname" required>
                     </div>
-                    <div class="form-group">
-                        <label>Suffix</label>
-                        <input type="text" name="suffix" id="edit_suffix" placeholder="e.g., Jr., Sr., III">
-                    </div>
+
+                    <?php naInput(
+                        'suffix', 'edit_suffix',
+                        'Suffix', false,
+                        'e.g., Jr., Sr., III'
+                    ); ?>
+
                     <div class="form-group">
                         <label>Admission Type <span class="required">*</span></label>
                         <select name="admission_type" id="edit_admission_type" required>
@@ -604,21 +686,26 @@ $pageTitle = 'Applications Management';
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Date of Birth <span class="required">*</span></label>
-                        <input type="date" name="date_of_birth" id="edit_date_of_birth" required>
+                        <label>Date of Birth</label>
+                        <input type="date" name="date_of_birth" id="edit_date_of_birth"
+                               onchange="calculateAge('edit')">
                     </div>
                     <div class="form-group">
                         <label>Age</label>
                         <input type="number" name="age" id="edit_age" readonly>
                     </div>
-                    <div class="form-group">
-                        <label>Place of Birth <span class="required">*</span></label>
-                        <input type="text" name="place_of_birth" id="edit_place_of_birth" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Religion</label>
-                        <input type="text" name="religion" id="edit_religion">
-                    </div>
+
+                    <?php naInput(
+                        'place_of_birth', 'edit_place_of_birth',
+                        'Place of Birth', false,
+                        'Type or click N/A'
+                    ); ?>
+
+                    <?php naInput(
+                        'religion', 'edit_religion',
+                        'Religion', false,
+                        'Type or click N/A'
+                    ); ?>
                 </div>
             </div>
 
@@ -637,10 +724,12 @@ $pageTitle = 'Applications Management';
                         <label>Province <span class="required">*</span></label>
                         <input type="text" name="address_province" id="edit_address_province" required>
                     </div>
-                    <div class="form-group full-width">
-                        <label>Complete Address</label>
-                        <textarea name="address_complete" id="edit_address_complete" rows="2"></textarea>
-                    </div>
+
+                    <?php naInput(
+                        'address_complete', 'edit_address_complete',
+                        'Complete Address', false,
+                        'Type or click N/A', '', 'textarea'
+                    ); ?>
                 </div>
             </div>
 
@@ -656,16 +745,18 @@ $pageTitle = 'Applications Management';
                         <input type="text" name="contact_number" id="edit_contact_number"
                                required placeholder="09xxxxxxxxx">
                     </div>
-                    <div class="form-group">
-                        <label>Facebook Account</label>
-                        <input type="text" name="facebook" id="edit_facebook"
-                               placeholder="Facebook username or URL">
-                    </div>
-                    <div class="form-group">
-                        <label>Messenger</label>
-                        <input type="text" name="messenger" id="edit_messenger"
-                               placeholder="Messenger account">
-                    </div>
+
+                    <?php naInput(
+                        'facebook', 'edit_facebook',
+                        'Facebook Account', false,
+                        'Type or click N/A'
+                    ); ?>
+
+                    <?php naInput(
+                        'messenger', 'edit_messenger',
+                        'Messenger', false,
+                        'Type or click N/A'
+                    ); ?>
                 </div>
             </div>
 
@@ -677,11 +768,14 @@ $pageTitle = 'Applications Management';
                         <input type="text" name="school_last_attended"
                                id="edit_school_last_attended" required>
                     </div>
-                    <div class="form-group">
-                        <label>Year Graduated <span class="required">*</span></label>
-                        <input type="number" name="year_graduated" id="edit_year_graduated"
-                               min="1990" max="<?php echo date('Y'); ?>" required>
-                    </div>
+
+                    <?php naInput(
+                        'year_graduated', 'edit_year_graduated',
+                        'Year Graduated', false,
+                        'e.g., 2024-2025', '', 'text',
+                        'Format: YYYY-YYYY or click N/A', true
+                    ); ?>
+
                     <div class="form-group full-width">
                         <label>How did you hear about us?</label>
                         <select name="how_hear" id="edit_how_hear">
@@ -691,6 +785,7 @@ $pageTitle = 'Applications Management';
                             <option value="school">School</option>
                             <option value="advertisement">Advertisement</option>
                             <option value="other">Other</option>
+                            <option value="N/A">N/A</option>
                         </select>
                     </div>
                 </div>
@@ -704,15 +799,18 @@ $pageTitle = 'Applications Management';
                         <input type="text" name="parent_full_name"
                                id="edit_parent_full_name" required>
                     </div>
-                    <div class="form-group">
-                        <label>Parent Contact Number</label>
-                        <input type="text" name="parent_contact" id="edit_parent_contact"
-                               placeholder="09xxxxxxxxx">
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Parent Address</label>
-                        <textarea name="parent_address" id="edit_parent_address" rows="2"></textarea>
-                    </div>
+
+                    <?php naInput(
+                        'parent_contact', 'edit_parent_contact',
+                        'Parent Contact Number', false,
+                        '09xxxxxxxxx'
+                    ); ?>
+
+                    <?php naInput(
+                        'parent_address', 'edit_parent_address',
+                        'Parent Address', false,
+                        'Type or click N/A', '', 'textarea'
+                    ); ?>
                 </div>
             </div>
 
@@ -808,16 +906,12 @@ $pageTitle = 'Applications Management';
         letter-spacing: 0.4px;
     }
 
-    /* Stat card accent variations — all blue tones */
     .stat-card.stat-total     { border-top-color: var(--navy); }
     .stat-card.stat-total .number     { color: var(--navy); }
-
     .stat-card.stat-pending   { border-top-color: var(--sky); }
     .stat-card.stat-pending .number   { color: var(--sky); }
-
     .stat-card.stat-converted { border-top-color: var(--blue); }
     .stat-card.stat-converted .number { color: var(--blue); }
-
     .stat-card.stat-rejected  { border-top-color: var(--navy-dark); }
     .stat-card.stat-rejected .number  { color: var(--navy-dark); }
 
@@ -833,20 +927,9 @@ $pageTitle = 'Applications Management';
         line-height: 1.6;
     }
 
-    .info-banner a {
-        color: var(--blue);
-        font-weight: 600;
-        text-decoration: none;
-    }
-
-    .info-banner a:hover {
-        color: var(--navy);
-        text-decoration: underline;
-    }
-
-    .info-banner small {
-        color: var(--sky-muted);
-    }
+    .info-banner a { color: var(--blue); font-weight: 600; text-decoration: none; }
+    .info-banner a:hover { color: var(--navy); text-decoration: underline; }
+    .info-banner small { color: var(--sky-muted); }
 
     /* ---------- ALERTS ---------- */
     .alert {
@@ -856,29 +939,8 @@ $pageTitle = 'Applications Management';
         font-size: 14px;
     }
 
-    .alert-success {
-        background: #d4e8fc;
-        color: var(--navy);
-        border: 1px solid var(--sky-pale);
-    }
-
-    .alert-danger {
-        background: #dce8f5;
-        color: var(--navy-dark);
-        border: 1px solid var(--sky-pale);
-    }
-
-    .alert-info {
-        background: var(--sky-bg);
-        color: var(--navy);
-        border: 1px solid var(--sky-border);
-    }
-
-    .alert-warning {
-        background: #e8f0fe;
-        color: var(--navy);
-        border: 1px solid var(--sky-light);
-    }
+    .alert-success { background: #d4e8fc; color: var(--navy);      border: 1px solid var(--sky-pale); }
+    .alert-danger  { background: #dce8f5; color: var(--navy-dark); border: 1px solid var(--sky-pale); }
 
     /* ---------- SEARCH SECTION ---------- */
     .search-section {
@@ -961,17 +1023,14 @@ $pageTitle = 'Applications Management';
         box-sizing: border-box;
     }
 
-    .search-form input[type="text"]::placeholder {
-        color: var(--sky-muted);
-    }
-
+    .search-form input[type="text"]::placeholder { color: var(--sky-muted); }
     .search-form input[type="text"]:focus {
         outline: none;
         border-color: var(--navy);
         box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
     }
 
-    /* ---------- APPLICATIONS TABLE ---------- */
+    /* ---------- TABLE ---------- */
     .applications-table-container {
         background: white;
         border-radius: 8px;
@@ -995,10 +1054,6 @@ $pageTitle = 'Applications Management';
         font-size: 16px;
         font-weight: 700;
         color: var(--navy);
-    }
-
-    .table-header .title span {
-        color: var(--sky-muted) !important;
     }
 
     .badge-count {
@@ -1036,23 +1091,11 @@ $pageTitle = 'Applications Management';
         color: var(--navy);
     }
 
-    .table tbody tr {
-        transition: background 0.2s ease;
-    }
+    .table tbody tr { transition: background 0.2s ease; }
+    .table tbody tr:hover { background: var(--sky-bg-soft); }
+    .table tbody tr small { color: var(--sky-muted); font-size: 12px; }
 
-    .table tbody tr:hover {
-        background: var(--sky-bg-soft);
-    }
-
-    .table tbody tr small {
-        color: var(--sky-muted);
-        font-size: 12px;
-    }
-
-    .checkbox-column {
-        width: 40px;
-        text-align: center;
-    }
+    .checkbox-column { width: 40px; text-align: center; }
 
     .app-checkbox,
     #selectAll {
@@ -1062,7 +1105,7 @@ $pageTitle = 'Applications Management';
         accent-color: var(--navy);
     }
 
-    /* ---------- STATUS BADGES ---------- */
+    /* ---------- STATUS / TYPE BADGES ---------- */
     .status-badge {
         padding: 4px 12px;
         border-radius: 12px;
@@ -1077,7 +1120,6 @@ $pageTitle = 'Applications Management';
     .status-converted { background: #d4e8fc; color: var(--navy);      border: 1px solid var(--sky-pale); }
     .status-rejected  { background: #dce8f5; color: var(--navy-dark); border: 1px solid var(--sky-pale); }
 
-    /* ---------- ADMISSION TYPE BADGES ---------- */
     .badge {
         display: inline-block;
         padding: 3px 10px;
@@ -1094,7 +1136,7 @@ $pageTitle = 'Applications Management';
     .badge-senior_high { background: #dce8f5; color: var(--navy-dark); }
     .badge-default     { background: var(--sky-bg); color: var(--sky-muted); }
 
-    /* ---------- ACTION BUTTONS ---------- */
+    /* ---------- BUTTONS ---------- */
     .action-buttons {
         display: flex;
         gap: 5px;
@@ -1116,50 +1158,20 @@ $pageTitle = 'Applications Management';
         line-height: 1.4;
     }
 
-    .btn:hover {
-        transform: translateY(-1px);
-    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; }
 
-    .btn-sm {
-        padding: 4px 10px;
-        font-size: 12px;
-        border-radius: 4px;
-    }
-
-    .btn-primary {
-        background: var(--navy);
-        color: white;
-    }
+    .btn-primary   { background: var(--navy);      color: white; }
     .btn-primary:hover { background: var(--blue); }
-
-    .btn-success {
-        background: var(--blue);
-        color: white;
-    }
+    .btn-success   { background: var(--blue);      color: white; }
     .btn-success:hover { background: var(--navy); }
-
-    .btn-info {
-        background: var(--sky);
-        color: white;
-    }
+    .btn-info      { background: var(--sky);       color: white; }
     .btn-info:hover { background: var(--blue-mid); }
-
-    .btn-secondary {
-        background: var(--sky-muted);
-        color: white;
-    }
+    .btn-secondary { background: var(--sky-muted); color: white; }
     .btn-secondary:hover { background: var(--blue); }
-
-    .btn-warning {
-        background: var(--sky-light);
-        color: white;
-    }
+    .btn-warning   { background: var(--sky-light); color: white; }
     .btn-warning:hover { background: var(--sky); }
-
-    .btn-danger {
-        background: var(--navy-dark);
-        color: white;
-    }
+    .btn-danger    { background: var(--navy-dark); color: white; }
     .btn-danger:hover { background: var(--navy); }
 
     /* ---------- BULK ACTIONS ---------- */
@@ -1282,9 +1294,7 @@ $pageTitle = 'Applications Management';
         line-height: 1;
     }
 
-    .close:hover {
-        color: var(--navy);
-    }
+    .close:hover { color: var(--navy); }
 
     /* ---------- FORM SECTIONS ---------- */
     .application-form .form-section {
@@ -1321,9 +1331,7 @@ $pageTitle = 'Applications Management';
         gap: 5px;
     }
 
-    .form-group.full-width {
-        grid-column: 1 / -1;
-    }
+    .form-group.full-width { grid-column: 1 / -1; }
 
     .form-group label {
         font-weight: 600;
@@ -1365,7 +1373,8 @@ $pageTitle = 'Applications Management';
         box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
     }
 
-    .form-group input[readonly] {
+    .form-group input[readonly],
+    .form-group textarea[readonly] {
         background: var(--sky-bg-soft);
         cursor: not-allowed;
         color: var(--sky-muted);
@@ -1382,6 +1391,61 @@ $pageTitle = 'Applications Management';
         margin-top: 2px;
     }
 
+    /* ============================================================
+       N/A SELECTABLE INPUT
+       ============================================================ */
+    .na-group .na-input-wrap {
+        display: flex;
+        gap: 6px;
+        align-items: stretch;
+    }
+
+    .na-group .na-input {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .na-checkbox {
+        display: inline-flex !important;
+        align-items: center;
+        gap: 4px;
+        padding: 0 10px;
+        border: 2px solid var(--sky-border);
+        border-radius: 5px;
+        background: white;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--sky-muted);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s ease;
+        user-select: none;
+    }
+
+    .na-checkbox:hover {
+        border-color: var(--sky);
+        color: var(--navy);
+        background: var(--sky-bg-soft);
+    }
+
+    .na-checkbox input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        cursor: pointer;
+        accent-color: var(--navy);
+        margin: 0;
+    }
+
+    .na-checkbox:has(input:checked) {
+        background: var(--navy);
+        border-color: var(--navy);
+        color: white;
+    }
+
+    .na-checkbox:has(input:checked) input[type="checkbox"] {
+        accent-color: white;
+    }
+
     /* ---------- FORM ACTIONS ---------- */
     .form-actions {
         display: flex;
@@ -1395,85 +1459,48 @@ $pageTitle = 'Applications Management';
 
     /* ---------- RESPONSIVE ---------- */
     @media (max-width: 768px) {
-        .modal-content {
-            margin: 5% auto;
-            padding: 20px;
-            width: 95%;
-        }
-
-        .form-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .status-filters {
-            justify-content: center;
-        }
-
-        .search-form {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .search-form input[type="text"] {
-            min-width: unset;
-            width: 100%;
-        }
-
-        .table {
-            font-size: 12px;
-        }
-
-        .table th,
-        .table td {
-            padding: 8px;
-        }
-
-        .bulk-actions {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .bulk-actions select {
-            min-width: unset;
-            width: 100%;
-        }
-
-        .selected-count {
-            margin-left: 0;
-            text-align: center;
-        }
-
-        .form-actions {
-            flex-direction: column;
-        }
-
-        .form-actions .btn {
-            width: 100%;
-            text-align: center;
-        }
-
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
-        }
+        .modal-content { margin: 5% auto; padding: 20px; width: 95%; }
+        .form-grid { grid-template-columns: 1fr; }
+        .status-filters { justify-content: center; }
+        .search-form { flex-direction: column; align-items: stretch; }
+        .search-form input[type="text"] { min-width: unset; width: 100%; }
+        .table { font-size: 12px; }
+        .table th, .table td { padding: 8px; }
+        .bulk-actions { flex-direction: column; align-items: stretch; }
+        .bulk-actions select { min-width: unset; width: 100%; }
+        .selected-count { margin-left: 0; text-align: center; }
+        .form-actions { flex-direction: column; }
+        .form-actions .btn { width: 100%; text-align: center; }
+        .stats-grid { grid-template-columns: 1fr 1fr; }
     }
 
     @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .action-buttons {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .action-buttons .btn {
-            width: 100%;
-            text-align: center;
-        }
+        .stats-grid { grid-template-columns: 1fr; }
+        .action-buttons { flex-direction: column; align-items: stretch; }
+        .action-buttons .btn { width: 100%; text-align: center; }
     }
 </style>
 <script>
+// ===== N/A TOGGLE =====
+// Called when an N/A checkbox is clicked.
+// Sets/clears the paired input and toggles readonly state.
+function toggleNA(inputId, checkbox) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+
+    if (checkbox.checked) {
+        input.dataset.previousValue = input.value;  // remember what was typed
+        input.value = 'N/A';
+        input.readOnly = true;
+        input.classList.add('na-active');
+    } else {
+        input.value = input.dataset.previousValue || '';
+        input.readOnly = false;
+        input.classList.remove('na-active');
+        input.focus();
+    }
+}
+
 // ===== MODAL CONTROLS =====
 function showNewApplication() {
     document.getElementById('newApplicationModal').style.display = 'block';
@@ -1534,7 +1561,32 @@ function editApplication(id) {
 
             for (const [domId, field] of Object.entries(map)) {
                 const el = document.getElementById(domId);
-                if (el) el.value = app[field] ?? '';
+                if (!el) continue;
+
+                const raw = app[field] ?? '';
+                const isNA = typeof raw === 'string'
+                          && raw.trim().toUpperCase() === 'N/A';
+
+                // Look for the paired N/A checkbox (id = na_chk_<domId>)
+                const naChk = document.getElementById('na_chk_' + domId);
+
+                if (naChk) {
+                    // na-capable field
+                    if (isNA) {
+                        el.value = 'N/A';
+                        el.readOnly = true;
+                        el.classList.add('na-active');
+                        naChk.checked = true;
+                    } else {
+                        el.value = raw;
+                        el.readOnly = false;
+                        el.classList.remove('na-active');
+                        naChk.checked = false;
+                    }
+                } else {
+                    // plain field
+                    el.value = isNA ? '' : raw;
+                }
             }
 
             document.getElementById('editApplicationModal').style.display = 'block';
@@ -1547,18 +1599,34 @@ function editApplication(id) {
 }
 
 // ===== AGE CALCULATION =====
-function calculateAge() {
-    const birthInput = document.querySelector('input[name="date_of_birth"]');
-    if (!birthInput || !birthInput.value) return;
+function calculateAge(scope) {
+    const birthInputId = scope === 'edit' ? 'edit_date_of_birth' : null;
+    const ageInputId   = scope === 'edit' ? 'edit_age'         : 'new_age';
+
+    const birthInput = birthInputId
+        ? document.getElementById(birthInputId)
+        : document.querySelector('#applicationForm input[name="date_of_birth"]');
+
+    const ageInput = document.getElementById(ageInputId);
+
+    if (!birthInput || !ageInput || !birthInput.value) {
+        if (ageInput) ageInput.value = '';
+        return;
+    }
 
     const birth = new Date(birthInput.value);
     const today = new Date();
+
+    if (isNaN(birth.getTime())) {
+        ageInput.value = '';
+        return;
+    }
+
     let age = today.getFullYear() - birth.getFullYear();
     const m = today.getMonth() - birth.getMonth();
     if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
 
-    const ageInput = document.querySelector('input[name="age"]');
-    if (ageInput) ageInput.value = age;
+    ageInput.value = age >= 0 ? age : '';
 }
 
 // ===== BULK ACTIONS =====
@@ -1577,22 +1645,21 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.app-checkbox').forEach(cb => {
         cb.addEventListener('change', updateSelectedCount);
     });
+
+    const editDob = document.getElementById('edit_date_of_birth');
+    if (editDob) {
+        editDob.addEventListener('change', () => calculateAge('edit'));
+    }
 });
 
 function confirmBulkAction() {
     const actionEl = document.getElementById('bulkAction');
     const action   = actionEl ? actionEl.value : '';
 
-    if (!action) {
-        alert('Please select an action.');
-        return false;
-    }
+    if (!action) { alert('Please select an action.'); return false; }
 
     const selected = document.querySelectorAll('.app-checkbox:checked').length;
-    if (selected === 0) {
-        alert('Please select at least one application.');
-        return false;
-    }
+    if (selected === 0) { alert('Please select at least one application.'); return false; }
 
     if (action === 'delete') {
         return confirm('Are you sure you want to delete ' + selected + ' application(s)? This cannot be undone!');
@@ -1625,6 +1692,9 @@ document.getElementById('applicationForm')?.addEventListener('submit', function 
     let firstError = null;
 
     required.forEach(function (field) {
+        // Skip validation on inputs that are locked to N/A
+        if (field.readOnly && field.value === 'N/A') return;
+
         if (!field.value.trim()) {
             field.style.borderColor = '#dc3545';
             hasError = true;
@@ -1633,6 +1703,20 @@ document.getElementById('applicationForm')?.addEventListener('submit', function 
             field.style.borderColor = '';
         }
     });
+
+    // Year graduated format check (skip when set to N/A)
+    const yearGrad = this.querySelector('input[name="year_graduated"]');
+    if (yearGrad
+        && yearGrad.value.trim() !== ''
+        && yearGrad.value.trim().toUpperCase() !== 'N/A') {
+        const ok = /^\d{4}(\s*-\s*\d{4})?$/.test(yearGrad.value.trim());
+        if (!ok) {
+            yearGrad.style.borderColor = '#dc3545';
+            alert('⚠️ Year Graduated must be in YYYY-YYYY format (e.g., 2024-2025).');
+            e.preventDefault();
+            return;
+        }
+    }
 
     if (hasError) {
         e.preventDefault();

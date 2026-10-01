@@ -2,6 +2,15 @@
 // classes/ApplicationController.php - FULLY FIXED for `kms` schema
 //
 // FIXES:
+//   • sanitizeApplicationData(): year_graduated preserves "2024-2025" format
+//     (was cast to int, breaking the YYYY-YYYY requirement)
+//   • sanitizeApplicationData(): optional fields default to 'N/A' instead of ''
+//     so DB always shows a consistent fallback value
+//   • handleUpdate(): removed manual $data['updated_at'] — MySQL ON UPDATE
+//     handles it automatically now that Application::$timestamps = false
+//   • handleSubmit(): surfaces real DB error via Application::getLastError()
+//     instead of generic "Failed to submit application"
+//   • handleUpdate(): same real-error surfacing
 //   • getSectionsForApplicant(): enr_applicants has no year_level/semester
 //     → derive them from preferred_section_id
 //   • ajaxGetSubjectsForSection(): subject rows use
@@ -22,6 +31,23 @@ class ApplicationController {
     private $enrollment;
     private $requirement;
     private $student;
+
+    /**
+     * Optional fields that should default to 'N/A' when blank.
+     * Mirrors Application::$naDefaults.
+     */
+    private $naFields = [
+        'middle_name',
+        'suffix',
+        'address_complete',
+        'how_hear',
+        'religion',
+        'facebook',
+        'messenger',
+        'address',
+        'parent_contact',
+        'parent_address',
+    ];
 
     public function __construct() {
         $this->application  = new Application();
@@ -496,12 +522,34 @@ class ApplicationController {
         }
 
         $data = $this->sanitizeApplicationData($_POST);
-        $data['updated_at'] = date('Y-m-d H:i:s');
 
-        if ($this->application->update((int) $_POST['applicant_id'], $data)) {
+        // Normalize year_graduated to YYYY-YYYY (or N/A)
+        $data['year_graduated'] = $this->normalizeYearGraduated(
+            $data['year_graduated'] ?? ''
+        );
+
+        // Apply N/A defaults for optional fields
+        foreach ($this->naFields as $field) {
+            if (!isset($data[$field]) || trim((string) $data[$field]) === '') {
+                $data[$field] = 'N/A';
+            }
+        }
+
+        // ✅ REMOVED: $data['updated_at'] = date('Y-m-d H:i:s');
+        //    MySQL ON UPDATE current_timestamp() handles it automatically,
+        //    and updated_at is no longer in $fillable anyway.
+
+        $updated = $this->application->update((int) $_POST['applicant_id'], $data);
+
+        if ($updated) {
             $_SESSION['message'] = '✅ Application updated successfully!';
         } else {
-            $_SESSION['message'] = '❌ Failed to update application.';
+            $dbErr = method_exists($this->application, 'getLastError')
+                ? $this->application->getLastError()
+                : null;
+
+            $_SESSION['message'] = '❌ Failed to update application.'
+                                 . ($dbErr ? " ({$dbErr})" : '');
         }
     }
 
@@ -515,12 +563,26 @@ class ApplicationController {
             }
         }
 
-        $data   = $this->sanitizeApplicationData($_POST);
+        $data = $this->sanitizeApplicationData($_POST);
+
+        // Normalize year_graduated BEFORE handing off
+        $data['year_graduated'] = $this->normalizeYearGraduated(
+            $data['year_graduated'] ?? ''
+        );
+
         $result = $this->application->submitApplication($data);
 
-        $_SESSION['message'] = $result
-            ? '✅ Application submitted successfully! Go to Enrollments to enroll.'
-            : '❌ Failed to submit application.';
+        if ($result) {
+            $_SESSION['message'] = '✅ Application submitted successfully! Go to Enrollments to enroll.';
+        } else {
+            // ✅ Surface the real DB error if available
+            $dbErr = method_exists($this->application, 'getLastError')
+                ? $this->application->getLastError()
+                : null;
+
+            $_SESSION['message'] = '❌ Failed to submit application.'
+                                 . ($dbErr ? " ({$dbErr})" : '');
+        }
     }
 
     private function handleDelete() {
@@ -725,6 +787,13 @@ class ApplicationController {
        SANITIZATION
     ============================================================ */
 
+    /**
+     * Sanitize incoming POST data.
+     *
+     * FIX: year_graduated is now passed through sanitizeInput() (string)
+     * instead of (int), preserving "2024-2025" format. Actual normalization
+     * to YYYY-YYYY happens in normalizeYearGraduated().
+     */
     private function sanitizeApplicationData($postData) {
         return [
             'surname'              => $this->sanitizeInput($postData['surname'] ?? ''),
@@ -739,7 +808,10 @@ class ApplicationController {
             'address_province'     => $this->sanitizeInput($postData['address_province'] ?? ''),
             'address_complete'     => $this->sanitizeInput($postData['address_complete'] ?? ''),
             'school_last_attended' => $this->sanitizeInput($postData['school_last_attended'] ?? ''),
-            'year_graduated'       => !empty($postData['year_graduated']) ? (int) $postData['year_graduated'] : null,
+
+            // ✅ FIXED: keep as string, do NOT cast to int
+            'year_graduated'       => $this->sanitizeInput($postData['year_graduated'] ?? ''),
+
             'how_hear'             => $this->sanitizeInput($postData['how_hear'] ?? ''),
             'email'                => $this->sanitizeEmail($postData['email'] ?? ''),
             'date_of_birth'        => $this->sanitizeInput($postData['date_of_birth'] ?? ''),
@@ -776,6 +848,31 @@ class ApplicationController {
     private function sanitizeContactNumber($number) {
         $number = trim($number);
         return preg_replace('/[^0-9+]/', '', $number);
+    }
+
+    /**
+     * Normalize year_graduated to YYYY-YYYY format or 'N/A'.
+     * Mirrors Application::normalizeYearGraduated().
+     *
+     * Accepts: "2024-2025", "2024 - 2025", "2024/2025", "2024"
+     * Returns: "2024-2025" or "N/A"
+     */
+    private function normalizeYearGraduated($value) {
+        $value = trim((string) $value);
+
+        if ($value === '' || strtoupper($value) === 'N/A') {
+            return 'N/A';
+        }
+
+        if (preg_match('/(\d{4})\s*[-\/]\s*(\d{4})/', $value, $m)) {
+            return $m[1] . '-' . $m[2];
+        }
+
+        if (preg_match('/^(\d{4})$/', $value, $m)) {
+            return $m[1] . '-' . ((int) $m[1] + 1);
+        }
+
+        return 'N/A';
     }
 
     private function convertYearLevelToText($yearLevel) {
@@ -895,6 +992,20 @@ class ApplicationController {
         }
         unset($section);
 
+        // Build applicant name skipping "N/A" middle name
+        $nameParts = [];
+        if (!empty($applicant['first_name'])) {
+            $nameParts[] = $applicant['first_name'];
+        }
+        if (!empty($applicant['middle_name'])
+            && strtoupper(trim($applicant['middle_name'])) !== 'N/A') {
+            $nameParts[] = $applicant['middle_name'];
+        }
+        if (!empty($applicant['surname'])) {
+            $nameParts[] = $applicant['surname'];
+        }
+        $applicantName = implode(' ', $nameParts);
+
         return [
             'success'        => true,
             'sections'       => $sections,
@@ -903,11 +1014,7 @@ class ApplicationController {
             'course_name'    => $applicant['course_name'] ?? '',
             'year_level'     => $yearLevelText,
             'semester'       => $semesterText,
-            'applicant_name' => trim(
-                $applicant['first_name']
-                . ' ' . ($applicant['middle_name'] ?? '')
-                . ' ' . $applicant['surname']
-            )
+            'applicant_name' => $applicantName
         ];
     }
 

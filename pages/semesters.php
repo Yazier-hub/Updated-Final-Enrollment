@@ -8,6 +8,7 @@
 //   • Joins semesters → school_years to show which SY each semester belongs to
 //   • Escaped values in onclick attributes
 //   • is_array() guards on all fetchAll()/fetch() results
+//   • FIX: includes now use __DIR__ instead of $basePath
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -77,8 +78,8 @@ $activeSemester = $activeSemStmt->fetch(PDO::FETCH_ASSOC);
 $pageTitle = 'Semester Management';
 ?>
 
-<?php include $basePath . '/includes/header.php'; ?>
-<?php include $basePath . '/includes/sidebar.php'; ?>
+<?php include __DIR__ . '/../includes/header.php'; ?>
+<?php include __DIR__ . '/../includes/sidebar.php'; ?>
 
 <main class="main-content">
     <div class="container">
@@ -110,8 +111,8 @@ $pageTitle = 'Semester Management';
                     <div class="label">Active Semester</div>
                     <?php if ($activeSemester && !empty($activeSemester['school_year_name'])): ?>
                         <div class="sub-info">
-    SY: <?php echo htmlspecialchars($activeSemester['school_year_name']); ?>
-</div>
+                            SY: <?php echo htmlspecialchars($activeSemester['school_year_name']); ?>
+                        </div>
                     <?php endif; ?>
                 </div>
             </div>
@@ -224,13 +225,11 @@ $pageTitle = 'Semester Management';
                     <div class="alert alert-info">No semesters found in the database.</div>
                 <?php endif; ?>
             </div>
-
-            
         </div>
     </div>
 </main>
 
-<?php include $basePath . '/includes/footer.php'; ?>
+<?php include __DIR__ . '/../includes/footer.php'; ?>
 
 <style>
     /* ============================================================

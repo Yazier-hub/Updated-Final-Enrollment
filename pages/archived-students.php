@@ -7,6 +7,7 @@
 //   • is_array() guard on $archivedStudents
 //   • Null-safe reads throughout
 //   • Renamed search input ID to match a single canonical name
+//   • FIX: includes now use __DIR__ (matches applications.php pattern)
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -105,8 +106,8 @@ foreach ($archivedStudents as $s) {
 $pageTitle = 'Archived Students';
 ?>
 
-<?php include $basePath . '/includes/header.php'; ?>
-<?php include $basePath . '/includes/sidebar.php'; ?>
+<?php include __DIR__ . '/../includes/header.php'; ?>
+<?php include __DIR__ . '/../includes/sidebar.php'; ?>
 
 <main class="main-content">
     <div class="container">
@@ -367,7 +368,7 @@ $pageTitle = 'Archived Students';
     </div>
 </main>
 
-<?php include $basePath . '/includes/footer.php'; ?>
+<?php include __DIR__ . '/../includes/footer.php'; ?>
 
 <style>
     /* ============================================================

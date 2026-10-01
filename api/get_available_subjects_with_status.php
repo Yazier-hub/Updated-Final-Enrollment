@@ -3,10 +3,17 @@
  * api/get_available_subjects_with_status.php - FULLY FIXED for `kms` schema
  *
  * ✅ Retake subjects always included
- * ✅ Retake subjects always enrollable
+ * ✅ Retake subjects always enrollable (but only from valid schedules)
  * ✅ No duplicate subjects
  * ✅ Passes student's course_id to SubjectStatusManager::getAvailableSubjects()
  * ✅ Defensive guards on missing array keys
+ *
+ * FIXES IN THIS VERSION:
+ *   • Default semester is 'First', not 'Second'
+ *   • Uses current progression unless next.can_progress is true
+ *   • Retake schedules are resolved within the selected section when
+ *     section_id is provided
+ *   • Dedup key is subject_id (stable across sections)
  */
 
 error_reporting(E_ALL);
@@ -53,16 +60,35 @@ try {
     $current = $enrollment->getStudentCurrentProgression($studentId);
     $next    = $enrollment->getStudentNextProgression($studentId);
 
-    $yearLevel    = $next ? $next['year_level'] : ($student['year_level'] ?? 1);
-    $semester     = $next ? (int) $next['semester'] : 1;
+    // ------------------------------------------------------------
+    // Choose year level / semester
+    // ------------------------------------------------------------
+    // If the student CAN progress, use next progression.
+    // Otherwise stay on current.
+    // ------------------------------------------------------------
+    $canProgress = $next && !empty($next['can_progress']);
+
+    if ($canProgress) {
+        $yearLevel = (int) ($next['year_level'] ?? 1);
+        $semester  = (int) ($next['semester']   ?? 1);
+    } elseif ($current) {
+        $yearLevel = (int) ($current['year_level'] ?? 1);
+        $semester  = (int) ($current['semester']   ?? 1);
+    } else {
+        $yearLevel = (int) ($student['year_level'] ?? 1);
+        $semester  = 1;
+    }
+
     $semesterName = ($semester === 1) ? 'First' : 'Second';
 
     error_log("=== get_available_subjects_with_status DEBUG ===");
     error_log("Student ID: {$studentId}, Course ID: {$studentCourseId}");
-    error_log("Next progression: year_level={$yearLevel}, semester={$semester} ({$semesterName})");
+    error_log("Can progress: " . ($canProgress ? 'YES' : 'NO'));
+    error_log("Using year_level={$yearLevel}, semester={$semester} ({$semesterName})");
     error_log("Section ID: {$sectionId}");
 
     $subjects = [];
+    $seenSubjectIds = [];
 
     // ============================================================
     // 1️⃣ WITH SECTION_ID: Get subjects for the section
@@ -81,9 +107,15 @@ try {
         $yearLevelNumeric = $section->convertYearLevelToNumeric($sectionData['grade_level']);
 
         $semesterRaw = $sectionData['semester'] ?? '';
-        $semesterDb  = ($semesterRaw === '1st Semester' || $semesterRaw === 'First Semester')
-            ? 'First'
-            : 'Second';
+
+        if ($semesterRaw === '1st Semester' || $semesterRaw === 'First Semester') {
+            $semesterDb = 'First';
+        } elseif ($semesterRaw === '2nd Semester' || $semesterRaw === 'Second Semester') {
+            $semesterDb = 'Second';
+        } else {
+            // FIX: default to First, not Second
+            $semesterDb = 'First';
+        }
 
         error_log("Section: {$sectionData['section_code']}, year_level={$yearLevelNumeric}, semester={$semesterDb}");
 
@@ -116,10 +148,21 @@ try {
             $subject['message']        = $statusInfo['message'];
             $subject['subject_status'] = $statusInfo['status'];
 
-            // RETAKE: allow enroll even if section has no schedule
+            // RETAKE: ensure there is a usable schedule in THIS section
             if ($statusInfo['status'] === SubjectStatusManager::STATUS_RETAKE) {
+
                 $hasRepSchedule = !empty($subject['representative_schedule_id']);
+
+                if (!$hasRepSchedule && !empty($subject['schedule_id'])) {
+                    $subject['representative_schedule_id'] = (int) $subject['schedule_id'];
+                    $subject['has_schedule']               = true;
+                    $subject['is_retake']                  = true;
+                    $hasRepSchedule                        = true;
+                }
+
                 if (!$hasRepSchedule) {
+                    // Only fall back to global lookup if this is a sectionless retake
+                    // (sectionId > 0 means we want the retake inside this section)
                     $foundSchedule = $subjectStatus->findScheduleForSubject($subjId);
                     if ($foundSchedule) {
                         $subject['representative_schedule_id'] = $foundSchedule['schedule_id'];
@@ -130,7 +173,7 @@ try {
                 }
             }
 
-            // No schedule → BLOCKED (except RETAKE)
+            // No schedule → BLOCKED (except RETAKE which we keep enrollable)
             $hasSchedule = !empty($subject['has_schedule']);
             if (
                 !$hasSchedule &&
@@ -139,12 +182,14 @@ try {
                 $subject['status']  = SubjectStatusManager::STATUS_BLOCKED;
                 $subject['message'] = 'No schedule available in selected section';
             }
+
+            $seenSubjectIds[$subjId] = true;
         }
         unset($subject);
     }
 
     // ============================================================
-    // 2️⃣ ALWAYS ADD RETAKE SUBJECTS (with or without section_id)
+    // 2️⃣ ALWAYS ADD RETAKE SUBJECTS
     // ============================================================
     $retakeSubjects = $subjectStatus->getFailedSubjectsForRetake($studentId);
 
@@ -161,19 +206,8 @@ try {
             continue;
         }
 
-        // Skip if already in $subjects
-        $exists = false;
-        foreach ($subjects as $existing) {
-            if (
-                isset($existing['subject_id']) &&
-                (int) $existing['subject_id'] === $retakeId
-            ) {
-                $exists = true;
-                break;
-            }
-        }
-
-        if ($exists) {
+        // Skip if already in $subjects (dedup by subject_id, stable across sections)
+        if (isset($seenSubjectIds[$retakeId])) {
             continue;
         }
 
@@ -208,12 +242,12 @@ try {
             'failed_semester'             => $retake['failed_semester']     ?? null,
             'failed_school_year'          => $retake['failed_school_year']  ?? null
         ];
+
+        $seenSubjectIds[$retakeId] = true;
     }
 
     // ============================================================
     // 3️⃣ WITHOUT SECTION_ID: fall back to curriculum subjects
-    //    FIX: pass student's course_id so cross-course subjects
-    //         don't leak in.
     // ============================================================
     if ($sectionId === 0) {
         $curriculumSubjects = $subjectStatus->getAvailableSubjects(
@@ -236,19 +270,9 @@ try {
                 continue;
             }
 
-            $exists = false;
-            foreach ($subjects as $existing) {
-                if (
-                    isset($existing['subject_id']) &&
-                    (int) $existing['subject_id'] === $subjId
-                ) {
-                    $exists = true;
-                    break;
-                }
-            }
-
-            if (!$exists) {
+            if (!isset($seenSubjectIds[$subjId])) {
                 $subjects[] = $subject;
+                $seenSubjectIds[$subjId] = true;
             }
         }
     }
@@ -311,7 +335,8 @@ try {
             'school_year'   => $schoolYear,
             'student_id'    => $studentId,
             'section_id'    => $sectionId > 0 ? $sectionId : null,
-            'course_id'     => $studentCourseId > 0 ? $studentCourseId : null
+            'course_id'     => $studentCourseId > 0 ? $studentCourseId : null,
+            'can_progress'  => $canProgress
         ],
         'message' => 'Subjects retrieved successfully'
     ]);

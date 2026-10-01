@@ -7,6 +7,8 @@
 //   • Null-safe reads on all $app[...] / $enroll[...] fields
 //   • is_array() guards on all controller returns
 //   • window.onclick replaced with addEventListener
+//   • FIX: $baseUrl → $apiBaseUrl (avoids collision with includes/header.php)
+//   • FIX: includes now use __DIR__ (matches applications.php pattern)
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -124,17 +126,20 @@ unset(
 $stats = $controller->getEnrollmentStats();
 if (!is_array($stats)) $stats = [];
 
-// Base URL for API calls
+// ============================================================
+// FIX: JS API base URL (absolute) — different name from
+//       $baseUrl in includes/header.php so it doesn't collide.
+// ============================================================
 $protocol   = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https://' : 'http://';
 $host       = $_SERVER['HTTP_HOST'] ?? 'localhost';
 $scriptPath = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/');
-$baseUrl    = $protocol . $host . $scriptPath;
+$apiBaseUrl = $protocol . $host . $scriptPath;
 
 $pageTitle = 'Enrollment Management';
 ?>
 
-<?php include $basePath . '/includes/header.php'; ?>
-<?php include $basePath . '/includes/sidebar.php'; ?>
+<?php include __DIR__ . '/../includes/header.php'; ?>
+<?php include __DIR__ . '/../includes/sidebar.php'; ?>
 
 <main class="main-content">
     <div class="container">
@@ -706,7 +711,7 @@ $pageTitle = 'Enrollment Management';
     </div>
 </div>
 
-<?php include $basePath . '/includes/footer.php'; ?>
+<?php include __DIR__ . '/../includes/footer.php'; ?>
 
 <style>
 /* ============================================================
@@ -1498,7 +1503,9 @@ $pageTitle = 'Enrollment Management';
 // ============================================================
 var currentApplicantId = null;
 var currentCourseId    = null;
-var baseUrl            = <?php echo json_encode($baseUrl, JSON_UNESCAPED_SLASHES); ?>;
+
+// FIX: source from $apiBaseUrl (absolute URL for fetch calls)
+var baseUrl = <?php echo json_encode($apiBaseUrl, JSON_UNESCAPED_SLASHES); ?>;
 
 console.log('Base URL:', baseUrl);
 

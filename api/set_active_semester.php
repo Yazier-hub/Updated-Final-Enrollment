@@ -3,11 +3,9 @@
  * api/set_active_semester.php
  *
  * Sets a semester as active (is_active = 1) and deactivates all others.
- * Optionally sets the active school year.
  *
  * POST Parameters:
  * - semester_id: The ID of the semester to activate (required)
- * - school_year_id: The ID of the school year to activate (optional)
  *
  * NOTE: rgr_semesters column is `name`, not `semester_name`.
  */
@@ -32,45 +30,59 @@ try {
         jsonResponse(['success' => false, 'message' => 'POST required']);
     }
 
-    $semesterId   = isset($_POST['semester_id'])   ? (int) $_POST['semester_id']   : 0;
-    $schoolYearId = isset($_POST['school_year_id']) ? (int) $_POST['school_year_id'] : 0;
+    $semId = isset($_POST['semester_id']) ? (int) $_POST['semester_id'] : 0;
 
-    if ($semesterId <= 0) {
+    if ($semId <= 0) {
         jsonResponse(['success' => false, 'message' => 'Invalid semester ID']);
     }
 
-    // Verify semester exists — FIX: column is `name`
-    $stmt = $db->prepare("SELECT id, name FROM rgr_semesters WHERE id = ?");
-    $stmt->execute([$semesterId]);
-    $semester = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Verify semester exists — column is `name`
+    $stmt = $db->prepare("
+        SELECT s.id, s.name, s.school_year_id, sy.name AS school_year_name
+        FROM rgr_semesters s
+        LEFT JOIN rgr_school_years sy ON s.school_year_id = sy.id
+        WHERE s.id = ?
+    ");
+    $stmt->execute([$semId]);
+    $sem = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$semester) {
+    if (!$sem) {
         jsonResponse(['success' => false, 'message' => 'Semester not found']);
     }
 
     $db->beginTransaction();
     try {
-        $db->execute("UPDATE rgr_semesters SET is_active = 0");
+        // Deactivate all semesters
+        $deactivate = $db->prepare("UPDATE rgr_semesters SET is_active = 0");
+        $deactivate->execute();
 
-        $stmt = $db->prepare("UPDATE rgr_semesters SET is_active = 1 WHERE id = ?");
-        $stmt->execute([$semesterId]);
+        // Activate selected semester
+        $activate = $db->prepare("UPDATE rgr_semesters SET is_active = 1 WHERE id = ?");
+        $activate->execute([$semId]);
 
-        if ($schoolYearId > 0) {
-            $db->execute("UPDATE rgr_school_years SET is_active = 0");
-            $stmt = $db->prepare("UPDATE rgr_school_years SET is_active = 1 WHERE id = ?");
-            $stmt->execute([$schoolYearId]);
+        // Also activate the corresponding school year
+        if (!empty($sem['school_year_id'])) {
+            $deactivateSy = $db->prepare("UPDATE rgr_school_years SET is_active = 0");
+            $deactivateSy->execute();
+
+            $activateSy = $db->prepare("UPDATE rgr_school_years SET is_active = 1 WHERE id = ?");
+            $activateSy->execute([(int) $sem['school_year_id']]);
         }
 
         $db->commit();
 
         jsonResponse([
-            'success'       => true,
-            'message'       => 'Semester activated: ' . $semester['name'],
-            'semester_id'   => $semesterId,
-            'semester_name' => $semester['name']
+            'success'          => true,
+            'message'          => 'Semester activated: ' . $sem['name'],
+            'semester_id'      => $semId,
+            'semester_name'    => $sem['name'],
+            'school_year_id'   => $sem['school_year_id'],
+            'school_year_name' => $sem['school_year_name']
         ]);
-    } catch (Exception $e) {
-        $db->rollBack();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
         throw $e;
     }
 
@@ -80,7 +92,7 @@ try {
         'success' => false,
         'message' => 'DB Error: ' . $e->getMessage()
     ]);
-} catch (Exception $e) {
+} catch (Throwable $e) {
     error_log('set_active_semester.php Error: ' . $e->getMessage());
     jsonResponse([
         'success' => false,

@@ -7,6 +7,8 @@
 //               s.subject_name → s.name AS prerequisite_name
 //   • Defensive (int) casts on IDs
 //   • Null-safe read on grade / remarks
+//   • checkIfSubjectPassed(): use `final_grade` (not `grade`)
+//     and lowercase 'passed' (matches rgr_grades enum)
 
 require_once 'Model.php';
 
@@ -123,10 +125,13 @@ class PrerequisiteValidator extends Model {
     }
 
     /**
-     * Check if a subject is passed (grade > 75 OR remarks = 'Passed').
+     * Check if a subject is passed (final_grade > 75 OR remarks = 'passed').
+     *
+     * FIX: column is `final_grade` (not `grade`).
+     *      enum value is lowercase 'passed' (not 'Passed').
      */
     private function checkIfSubjectPassed($studentId, $subjectId) {
-        $sql = "SELECT g.grade, g.remarks
+        $sql = "SELECT g.final_grade, g.remarks
                 FROM rgr_grades g
                 INNER JOIN enr_enrollments e ON g.enrollment_id = e.enrollment_id
                 INNER JOIN cc_schedule s ON e.schedule_id = s.id
@@ -136,17 +141,20 @@ class PrerequisiteValidator extends Model {
                 LIMIT 1";
 
         $stmt = $this->connection->prepare($sql);
-        $stmt->execute([$studentId, $subjectId]);
+        $stmt->execute([(int) $studentId, (int) $subjectId]);
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$result) {
             return false;
         }
 
-        if ($result['grade'] !== null && (float) $result['grade'] > 75) {
+        // Primary check: final_grade > 75
+        if ($result['final_grade'] !== null && (float) $result['final_grade'] > 75) {
             return true;
         }
-        if ($result['remarks'] === 'Passed') {
+
+        // Fallback: remarks = 'passed' (lowercase enum value)
+        if (isset($result['remarks']) && strtolower((string) $result['remarks']) === 'passed') {
             return true;
         }
 

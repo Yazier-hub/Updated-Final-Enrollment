@@ -1,14 +1,4 @@
 <?php
-// pages/dashboard-overview.php - FULLY FIXED for `kms` schema
-//
-// FIXES IN THIS VERSION:
-//   • Monthly-trend loop now matches by NAME ('Jan', 'Feb', ...) — the
-//     EnrollmentReport::getMonthlyTrend() returns name strings, NOT integers.
-//     Previously the loop did (int) $row['month'] which cast every value to 0
-//     and skipped all rows → charts rendered empty.
-//   • is_array() guards on all model returns
-//   • Null-safe reads throughout
-
 require_once 'classes/Enrollment.php';
 require_once 'classes/Application.php';
 require_once 'classes/Student.php';
