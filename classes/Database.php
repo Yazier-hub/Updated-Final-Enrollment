@@ -1,9 +1,7 @@
 <?php
-// classes/Database.php - FULLY FIXED for `kms` schema
-//
-// FIXES:
-//   • Database name changed from 'lms' to 'kms'   ← CRITICAL
-//   • execute() now binds values with proper PDO types (INT / BOOL / NULL / STR)
+// classes/Database.php
+
+if (!class_exists('Database')) {
 
 class Database {
     private static $instance = null;
@@ -11,7 +9,7 @@ class Database {
     private $host     = 'localhost';
     private $username = 'root';
     private $password = '';
-    private $database = 'lms';                     // ← FIXED
+    private $database = 'bcp';
     private $port     = 3306;
     private $charset  = 'utf8mb4';
     private $options;
@@ -34,10 +32,6 @@ class Database {
 
         $this->connect();
     }
-
-    /* ============================================================
-       CONNECT
-    ============================================================ */
 
     private function connect() {
         try {
@@ -88,10 +82,6 @@ class Database {
         return $this->lastError;
     }
 
-    /* ============================================================
-       PREPARE / QUERY / EXECUTE
-    ============================================================ */
-
     public function prepare($sql) {
         try {
             if (!$this->connected || $this->connection === null) {
@@ -119,10 +109,6 @@ class Database {
         }
     }
 
-    /**
-     * Execute a prepared statement with typed parameter binding.
-     * FIX: bind with proper PDO type (INT / BOOL / NULL / STR)
-     */
     public function execute($sql, $params = []) {
         try {
             if (!$this->connected || $this->connection === null) {
@@ -165,10 +151,6 @@ class Database {
         }
         return $this->connection->lastInsertId();
     }
-
-    /* ============================================================
-       TRANSACTIONS
-    ============================================================ */
 
     public function beginTransaction() {
         try {
@@ -229,10 +211,6 @@ class Database {
     public function getTransactionLevel() {
         return $this->transactionLevel;
     }
-
-    /* ============================================================
-       UTILITIES
-    ============================================================ */
 
     public function escape($string) {
         if (!$this->connected || $this->connection === null) {
@@ -301,10 +279,6 @@ class Database {
         }
     }
 
-    /* ============================================================
-       LOGGING
-    ============================================================ */
-
     public function enableLogging()  { $this->enableLogging = true; }
     public function disableLogging() { $this->enableLogging = false; }
     public function getQueryLog()    { return $this->queryLog; }
@@ -319,10 +293,6 @@ class Database {
             ];
         }
     }
-
-    /* ============================================================
-       CONFIG / METADATA
-    ============================================================ */
 
     private function isDevelopment() {
         $host  = $_SERVER['HTTP_HOST'] ?? '';
@@ -363,3 +333,5 @@ class Database {
     private function __clone() {}
     public function __wakeup() {}
 }
+
+} // end class_exists guard

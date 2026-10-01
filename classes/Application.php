@@ -1,5 +1,17 @@
 <?php
-// classes/Application.php - CONFIRMED COMPATIBLE WITH `kms` SCHEMA
+// classes/Application.php - FULLY FIXED for `kms` schema
+//
+// FIXES:
+//   • $timestamps = false — enr_applicants has NO `created_at` column.
+//     It uses `submitted_at` (DEFAULT current_timestamp) and
+//     `updated_at` (ON UPDATE current_timestamp). Let MySQL handle both.
+//   • Removed $data['submitted_at'] from submitApplication() — MySQL fills it.
+//   • year_graduated now supports "2024-2025" format (varchar, not int)
+//   • N/A defaults applied for optional fields on submit
+//   • Middle name / suffix "N/A" skipped during name formatting
+//   • Extracted conversionFailure() to remove duplication
+//   • Added display() static helper for views
+
 require_once 'Model.php';
 require_once 'User.php';
 require_once 'EmailSender.php';
@@ -7,6 +19,21 @@ require_once 'EmailSender.php';
 class Application extends Model {
     protected $table = 'enr_applicants';
     protected $primaryKey = 'applicant_id';
+
+    /**
+     * ✅ CRITICAL FIX
+     * enr_applicants has NO `created_at` column.
+     * Its timestamps come from MySQL:
+     *   `submitted_at` timestamp NOT NULL DEFAULT current_timestamp()
+     *   `updated_at`   timestamp NOT NULL DEFAULT current_timestamp()
+     *                  ON UPDATE current_timestamp()
+     *
+     * Setting $timestamps = false stops Model::create() / update()
+     * from injecting `created_at` / `updated_at`, which would otherwise
+     * trigger: SQLSTATE[42S22] Unknown column 'created_at' in 'field list'
+     */
+    protected $timestamps = false;
+
     protected $fillable = [
         'surname', 'first_name', 'middle_name', 'suffix',
         'admission_type', 'working_student',
@@ -18,21 +45,93 @@ class Application extends Model {
         'parent_full_name', 'parent_contact', 'parent_address',
         'course_id', 'preferred_section_id',
         'status', 'notes'
+        // NOTE: submitted_at / updated_at intentionally omitted.
+        // MySQL fills them via DEFAULT / ON UPDATE.
+    ];
+
+    /**
+     * Optional fields that should default to 'N/A' when left blank.
+     * NOTE: year_graduated is handled separately to enforce YYYY-YYYY.
+     */
+    private $naDefaults = [
+        'middle_name',
+        'suffix',
+        'address_complete',
+        'how_hear',
+        'religion',
+        'facebook',
+        'messenger',
+        'address',
+        'parent_contact',
+        'parent_address',
+        'notes',
     ];
 
     public function __construct() {
         parent::__construct();
     }
 
+    /* ============================================================
+       SUBMIT
+    ============================================================ */
+
     public function submitApplication($data) {
         unset($data['action'], $data['submit']);
-        $data['submitted_at'] = date('Y-m-d H:i:s');
+
+        // ✅ REMOVED: $data['submitted_at'] — MySQL DEFAULT handles it
+        //             (Model::create() would strip it anyway because
+        //             submitted_at is not in $fillable.)
+
         $data['status'] = 'pending';
+
         if (empty($data['admission_type'])) {
             $data['admission_type'] = 'freshmen';
         }
+
+        // Apply N/A defaults for optional fields
+        foreach ($this->naDefaults as $field) {
+            if (!isset($data[$field]) || trim((string) $data[$field]) === '') {
+                $data[$field] = 'N/A';
+            }
+        }
+
+        // Year graduated: keep YYYY-YYYY format, fallback to N/A
+        $data['year_graduated'] = $this->normalizeYearGraduated(
+            $data['year_graduated'] ?? ''
+        );
+
         return $this->create($data);
     }
+
+    /**
+     * Normalize year_graduated to YYYY-YYYY format or 'N/A'.
+     * Accepts: "2024-2025", "2024 - 2025", "2024/2025", "2024"
+     * Returns: "2024-2025" or "N/A"
+     */
+    private function normalizeYearGraduated($value) {
+        $value = trim((string) $value);
+
+        if ($value === '' || strtoupper($value) === 'N/A') {
+            return 'N/A';
+        }
+
+        // Try to extract two 4-digit years
+        if (preg_match('/(\d{4})\s*[-\/]\s*(\d{4})/', $value, $m)) {
+            return $m[1] . '-' . $m[2];
+        }
+
+        // Single year → make a range
+        if (preg_match('/^(\d{4})$/', $value, $m)) {
+            return $m[1] . '-' . ((int) $m[1] + 1);
+        }
+
+        // Unrecognized → N/A
+        return 'N/A';
+    }
+
+    /* ============================================================
+       QUERIES
+    ============================================================ */
 
     public function getPendingApplications() {
         $sql = "SELECT a.*, c.code as course_code, c.name as course_name
@@ -99,6 +198,10 @@ class Application extends Model {
         }
     }
 
+    /* ============================================================
+       STATUS UPDATES
+    ============================================================ */
+
     public function updateStatus($applicationId, $status) {
         try {
             $sql = "UPDATE enr_applicants SET status = ? WHERE applicant_id = ?";
@@ -110,6 +213,10 @@ class Application extends Model {
         }
     }
 
+    /* ============================================================
+       CONVERSION
+    ============================================================ */
+
     /**
      * Convert applicant to student and enroll in subjects via schedule_ids.
      * ONE schedule = ONE enrollment record in enr_enrollments.
@@ -118,16 +225,20 @@ class Application extends Model {
         $applicant = $this->getApplicationById($applicantId);
 
         if (!$applicant) {
-            return ['success' => false, 'message' => 'Applicant not found.'];
+            return $this->conversionFailure('Applicant not found.');
         }
         if (empty($applicant['course_id'])) {
-            return ['success' => false, 'message' => 'Applicant has no course assigned.'];
+            return $this->conversionFailure('Applicant has no course assigned.');
         }
         if (empty($applicant['email']) || !filter_var($applicant['email'], FILTER_VALIDATE_EMAIL)) {
-            return ['success' => false, 'message' => 'Applicant has an invalid email address: ' . $applicant['email']];
+            return $this->conversionFailure(
+                'Applicant has an invalid email address: ' . ($applicant['email'] ?? '')
+            );
         }
 
-        if (!is_array($scheduleIds)) $scheduleIds = [];
+        if (!is_array($scheduleIds)) {
+            $scheduleIds = [];
+        }
         $scheduleIds = array_values(array_unique(array_filter(
             array_map('intval', $scheduleIds),
             fn($id) => $id > 0
@@ -147,7 +258,7 @@ class Application extends Model {
 
             require_once __DIR__ . '/Section.php';
             $sectionModel = new Section();
-            $section = $sectionModel->findById($sectionId);
+            $section      = $sectionModel->findById($sectionId);
 
             $yearLevel = 1;
             if ($section && isset($section['grade_level'])) {
@@ -165,7 +276,7 @@ class Application extends Model {
             $requirement = new Requirement();
             $requirement->initializeStudentRequirements($studentId, $applicantId);
 
-            $sql = "UPDATE enr_applicants SET status = 'converted' WHERE applicant_id = ?";
+            $sql  = "UPDATE enr_applicants SET status = 'converted' WHERE applicant_id = ?";
             $stmt = $this->connection->prepare($sql);
             $stmt->execute([$applicantId]);
 
@@ -184,14 +295,24 @@ class Application extends Model {
                 throw new Exception('Student record could not be retrieved.');
             }
 
+            // Build full name, skipping "N/A" middle name / suffix
             $nameParts = [];
             if (!empty($applicant['first_name']))  $nameParts[] = $applicant['first_name'];
-            if (!empty($applicant['middle_name'])) $nameParts[] = $applicant['middle_name'];
+
+            if (!empty($applicant['middle_name'])
+                && strtoupper(trim($applicant['middle_name'])) !== 'N/A') {
+                $nameParts[] = $applicant['middle_name'];
+            }
+
             if (!empty($applicant['surname']))     $nameParts[] = $applicant['surname'];
             $fullName = implode(' ', $nameParts);
-            if (!empty($applicant['suffix'])) $fullName .= ' ' . $applicant['suffix'];
 
-            $user = new User();
+            if (!empty($applicant['suffix'])
+                && strtoupper(trim($applicant['suffix'])) !== 'N/A') {
+                $fullName .= ' ' . $applicant['suffix'];
+            }
+
+            $user          = new User();
             $accountResult = $user->createStudentAccount(
                 $studentId, $studentData['student_number'], $applicant['email'], $fullName
             );
@@ -199,16 +320,21 @@ class Application extends Model {
                 throw new Exception($accountResult['message'] ?? 'Failed to create user account.');
             }
 
-            $accountCreated = $accountResult['is_new']  ?? false;
+            $accountCreated = $accountResult['is_new']   ?? false;
             $username       = $accountResult['username'] ?? $studentData['student_number'];
             $password       = $accountResult['password'] ?? null;
             $userId         = $accountResult['user_id']  ?? null;
 
             if ($transactionStarted) {
-                if ($this->connection->inTransaction()) $this->connection->commit();
+                if ($this->connection->inTransaction()) {
+                    $this->connection->commit();
+                }
             } else {
-                try { $this->connection->exec('RELEASE SAVEPOINT convert_to_student'); }
-                catch (Exception $e) { error_log('Savepoint release error: ' . $e->getMessage()); }
+                try {
+                    $this->connection->exec('RELEASE SAVEPOINT convert_to_student');
+                } catch (Exception $e) {
+                    error_log('Savepoint release error: ' . $e->getMessage());
+                }
             }
 
             $emailSent  = false;
@@ -221,7 +347,9 @@ class Application extends Model {
                         $fullName, $studentData['student_number'], $password, $applicant['email']
                     );
                     $emailSent = $emailResult['success'] ?? false;
-                    if (!$emailSent) $emailError = $emailResult['message'] ?? 'Unknown email error.';
+                    if (!$emailSent) {
+                        $emailError = $emailResult['message'] ?? 'Unknown email error.';
+                    }
                 } catch (Exception $e) {
                     $emailSent  = false;
                     $emailError = $e->getMessage();
@@ -249,34 +377,24 @@ class Application extends Model {
                 'password'         => $password,
                 'is_new_account'   => $accountCreated,
                 'email_sent'       => $emailSent,
-                'email_error'      => $emailError
+                'email_error'      => $emailError,
             ];
 
         } catch (Exception $e) {
             if ($transactionStarted) {
-                if ($this->connection->inTransaction()) $this->connection->rollBack();
+                if ($this->connection->inTransaction()) {
+                    $this->connection->rollBack();
+                }
             } else {
-                try { $this->connection->exec('ROLLBACK TO SAVEPOINT convert_to_student'); }
-                catch (Exception $e2) { error_log('Savepoint rollback error: ' . $e2->getMessage()); }
+                try {
+                    $this->connection->exec('ROLLBACK TO SAVEPOINT convert_to_student');
+                } catch (Exception $e2) {
+                    error_log('Savepoint rollback error: ' . $e2->getMessage());
+                }
             }
 
             error_log('ERROR in convertToStudentAndEnroll: ' . $e->getMessage());
-
-            return [
-                'success'          => false,
-                'message'          => 'Enrollment failed: ' . $e->getMessage(),
-                'student_id'       => null,
-                'student_number'   => null,
-                'enrollment_count' => 0,
-                'enrollment_ids'   => [],
-                'account_created'  => false,
-                'user_id'          => null,
-                'username'         => null,
-                'password'         => null,
-                'is_new_account'   => false,
-                'email_sent'       => false,
-                'email_error'      => null
-            ];
+            return $this->conversionFailure('Enrollment failed: ' . $e->getMessage());
         }
     }
 
@@ -284,13 +402,38 @@ class Application extends Model {
         return $this->convertToStudentAndEnroll($applicantId, $sectionId, $schoolYear, $scheduleIds);
     }
 
+    /**
+     * Standardized failure shape for convertToStudentAndEnroll().
+     */
+    private function conversionFailure($message) {
+        return [
+            'success'          => false,
+            'message'          => $message,
+            'student_id'       => null,
+            'student_number'   => null,
+            'enrollment_count' => 0,
+            'enrollment_ids'   => [],
+            'account_created'  => false,
+            'user_id'          => null,
+            'username'         => null,
+            'password'         => null,
+            'is_new_account'   => false,
+            'email_sent'       => false,
+            'email_error'      => null,
+        ];
+    }
+
     private function convertGradeLevelToNumeric($gradeLevel) {
         $map = ['1st Year' => 1, '2nd Year' => 2, '3rd Year' => 3, '4th Year' => 4];
         return $map[$gradeLevel] ?? 1;
     }
 
+    /* ============================================================
+       STATS / ANALYTICS
+    ============================================================ */
+
     public function getApplicationStats() {
-        $sql = "SELECT status, COUNT(*) as count FROM enr_applicants GROUP BY status";
+        $sql  = "SELECT status, COUNT(*) as count FROM enr_applicants GROUP BY status";
         $stmt = $this->connection->prepare($sql);
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -312,7 +455,7 @@ class Application extends Model {
                   AND (a.first_name LIKE ? OR a.surname LIKE ?
                        OR a.email LIKE ? OR a.contact_number LIKE ?)
                 ORDER BY a.submitted_at DESC";
-        $stmt = $this->connection->prepare($sql);
+        $stmt   = $this->connection->prepare($sql);
         $search = '%' . $keyword . '%';
         $stmt->execute([$search, $search, $search, $search]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -325,7 +468,7 @@ class Application extends Model {
                 WHERE a.first_name LIKE ? OR a.surname LIKE ?
                    OR a.email LIKE ? OR a.contact_number LIKE ?
                 ORDER BY a.submitted_at DESC";
-        $stmt = $this->connection->prepare($sql);
+        $stmt   = $this->connection->prepare($sql);
         $search = '%' . $keyword . '%';
         $stmt->execute([$search, $search, $search, $search]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -349,7 +492,7 @@ class Application extends Model {
 
     public function countApplicationsByStatus($status) {
         try {
-            $sql = "SELECT COUNT(*) as count FROM enr_applicants WHERE status = ?";
+            $sql  = "SELECT COUNT(*) as count FROM enr_applicants WHERE status = ?";
             $stmt = $this->connection->prepare($sql);
             $stmt->execute([$status]);
             $result = $stmt->fetch();
@@ -413,7 +556,7 @@ class Application extends Model {
 
     public function getTotalApplications() {
         try {
-            $sql = "SELECT COUNT(*) as total FROM enr_applicants";
+            $sql  = "SELECT COUNT(*) as total FROM enr_applicants";
             $stmt = $this->connection->prepare($sql);
             $stmt->execute();
             $result = $stmt->fetch();
@@ -438,5 +581,19 @@ class Application extends Model {
             error_log('Error in getStats: ' . $e->getMessage());
             return ['total' => 0, 'pending' => 0, 'converted' => 0, 'rejected' => 0];
         }
+    }
+
+    /* ============================================================
+       DISPLAY HELPERS
+    ============================================================ */
+
+    /**
+     * Return display value, using 'N/A' for null/empty.
+     * Useful in views to avoid repeating ?? 'N/A' everywhere.
+     */
+    public static function display($value, $fallback = 'N/A') {
+        if ($value === null) return $fallback;
+        if (is_string($value) && trim($value) === '') return $fallback;
+        return $value;
     }
 }

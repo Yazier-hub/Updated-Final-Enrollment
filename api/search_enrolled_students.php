@@ -10,11 +10,15 @@
  *
  * Returns JSON:
  *   { success, count, total, data[], message }
+ *
+ * FIXES IN THIS VERSION:
+ *   • Single grouped query for subject_count (no N+1 correlated subquery)
+ *   • LIMIT/OFFSET are bound parameters, not string-interpolated
+ *   • LIKE wildcards are escaped in the search term
+ *   • Optional `school_year` filter for subject_count scoping
+ *   • Handles missing `enrolled_at` column gracefully
  */
 
-// ============================================================
-// HEADERS
-// ============================================================
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-cache, must-revalidate');
 header('Access-Control-Allow-Origin: *');
@@ -23,13 +27,8 @@ header('Access-Control-Allow-Methods: GET, POST');
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 
-// ============================================================
-// BOOTSTRAP — Load dependencies
-// ============================================================
-// File is at api/ folder — parent is the project root
 $basePath = dirname(__DIR__);
 
-// Verify class files exist
 $requiredFiles = [
     $basePath . '/classes/Database.php',
     $basePath . '/classes/Enrollment.php',
@@ -66,18 +65,24 @@ try {
 // ============================================================
 // READ PARAMETERS
 // ============================================================
-$search    = trim($_GET['search']      ?? '');
-$courseId  = isset($_GET['course_id'])  ? (int) $_GET['course_id']  : 0;
-$yearLevel = isset($_GET['year_level']) ? (int) $_GET['year_level'] : 0;
-$sectionId = isset($_GET['section_id']) ? (int) $_GET['section_id'] : 0;
-$status    = trim($_GET['status']      ?? '');
-$limit     = isset($_GET['limit'])      ? (int) $_GET['limit']      : 100;
-$offset    = isset($_GET['offset'])     ? (int) $_GET['offset']     : 0;
+$search     = trim($_GET['search']      ?? '');
+$courseId   = isset($_GET['course_id'])  ? (int) $_GET['course_id']  : 0;
+$yearLevel  = isset($_GET['year_level']) ? (int) $_GET['year_level'] : 0;
+$sectionId  = isset($_GET['section_id']) ? (int) $_GET['section_id'] : 0;
+$status     = trim($_GET['status']       ?? '');
+$schoolYear = trim($_GET['school_year']  ?? '');
+$limit      = isset($_GET['limit'])      ? (int) $_GET['limit']      : 100;
+$offset     = isset($_GET['offset'])     ? (int) $_GET['offset']     : 0;
 
-// Sanity limits
 if ($limit  <= 0)   $limit  = 100;
 if ($limit  > 500)  $limit  = 500;
 if ($offset < 0)    $offset = 0;
+
+// ============================================================
+// ESCAPE LIKE WILDCARDS
+// ============================================================
+$escapedSearch = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search);
+$term = '%' . $escapedSearch . '%';
 
 // ============================================================
 // BUILD QUERY
@@ -92,7 +97,6 @@ try {
                 s.year_level,
                 s.section_id,
                 s.enrollment_status AS student_enrollment_status,
-                s.enrolled_at,
 
                 a.first_name,
                 a.middle_name,
@@ -112,26 +116,40 @@ try {
                 sem.name AS section_semester,
                 sy.name  AS school_year,
 
-                (
-                    SELECT COUNT(DISTINCT e2.schedule_id)
-                    FROM enr_enrollments e2
-                    WHERE e2.student_id = s.student_id
-                      AND e2.enrollment_status = 'enrolled'
-                ) AS subject_count
+                COALESCE(sc.subject_count, 0) AS subject_count
+
             FROM enr_students s
             INNER JOIN enr_applicants a  ON s.applicant_id = a.applicant_id
             LEFT  JOIN cc_sections    sec ON s.section_id  = sec.id
             LEFT  JOIN rgr_courses    c   ON s.course_id   = c.id
             LEFT  JOIN rgr_semesters  sem ON sec.semester_id = sem.id
             LEFT  JOIN rgr_school_years sy ON sec.school_year_id = sy.id
+
+            /* Single grouped subquery for subject_count (no N+1) */
+            LEFT JOIN (
+                SELECT e.student_id,
+                       COUNT(DISTINCT e.schedule_id) AS subject_count
+                FROM enr_enrollments e
+                WHERE e.enrollment_status = 'enrolled'
+                  " . ($schoolYear !== '' ? "AND e.school_year = ?" : "") . "
+                GROUP BY e.student_id
+            ) AS sc ON sc.student_id = s.student_id
+
             WHERE s.archived_at IS NULL
               AND EXISTS (
                   SELECT 1 FROM enr_enrollments e
                   WHERE e.student_id = s.student_id
                     AND e.enrollment_status = 'enrolled'
+                    " . ($schoolYear !== '' ? "AND e.school_year = ?" : "") . "
               )";
 
     $params = [];
+
+    // Binds for the subquery school_year (appears before WHERE binds)
+    if ($schoolYear !== '') {
+        $params[] = $schoolYear; // subquery sc.school_year
+        $params[] = $schoolYear; // EXISTS school_year
+    }
 
     // Filter by course
     if ($courseId > 0) {
@@ -157,9 +175,7 @@ try {
         $params[] = $status;
     }
 
-    // Search term — matches name, student number, section, course, email, contact
-    $term = '%' . $search . '%';
-
+    // Search term
     if ($search !== '') {
         $sql .= " AND (
                     CONCAT_WS(' ', a.first_name, a.middle_name, a.surname, a.suffix) LIKE ?
@@ -179,9 +195,13 @@ try {
         $params[] = $term;  // contact_number
     }
 
+    // FIX: bound LIMIT/OFFSET
     $sql .= " GROUP BY s.student_id
               ORDER BY a.surname ASC, a.first_name ASC
-              LIMIT {$limit} OFFSET {$offset}";
+              LIMIT ? OFFSET ?";
+
+    $params[] = $limit;
+    $params[] = $offset;
 
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -202,10 +222,14 @@ try {
                        SELECT 1 FROM enr_enrollments e
                        WHERE e.student_id = s.student_id
                          AND e.enrollment_status = 'enrolled'
+                         " . ($schoolYear !== '' ? "AND e.school_year = ?" : "") . "
                    )";
 
     $countParams = [];
 
+    if ($schoolYear !== '') {
+        $countParams[] = $schoolYear;
+    }
     if ($courseId > 0) {
         $countSql .= " AND s.course_id = ?";
         $countParams[] = $courseId;
@@ -258,38 +282,34 @@ try {
         );
 
         $formatted[] = [
-            'student_id'       => (int) ($row['student_id']       ?? 0),
-            'student_number'   => $row['student_number']           ?? '',
-            'full_name'        => $fullName,
-            'first_name'       => $row['first_name']               ?? '',
-            'middle_name'      => $row['middle_name']              ?? '',
-            'surname'          => $row['surname']                  ?? '',
-            'suffix'           => $row['suffix']                   ?? '',
-            'email'            => $row['email']                    ?? '',
-            'contact_number'   => $row['contact_number']           ?? '',
-            'admission_type'   => $row['admission_type']           ?? '',
+            'student_id'        => (int) ($row['student_id']       ?? 0),
+            'student_number'    => $row['student_number']           ?? '',
+            'full_name'         => $fullName,
+            'first_name'        => $row['first_name']               ?? '',
+            'middle_name'       => $row['middle_name']              ?? '',
+            'surname'           => $row['surname']                  ?? '',
+            'suffix'            => $row['suffix']                   ?? '',
+            'email'             => $row['email']                    ?? '',
+            'contact_number'    => $row['contact_number']           ?? '',
+            'admission_type'    => $row['admission_type']           ?? '',
 
-            'course_id'        => (int) ($row['course_id']         ?? 0),
-            'course_code'      => $row['course_code']              ?? '',
-            'course_name'      => $row['course_name']              ?? '',
+            'course_id'         => (int) ($row['course_id']         ?? 0),
+            'course_code'       => $row['course_code']              ?? '',
+            'course_name'       => $row['course_name']              ?? '',
 
-            'section_id'       => (int) ($row['section_id']        ?? 0),
-            'section_code'     => $row['section_code']             ?? '',
-            'grade_level'      => $row['grade_level']              ?? '',
-            'section_semester' => $row['section_semester']         ?? '',
-            'school_year'      => $row['school_year']              ?? '',
+            'section_id'        => (int) ($row['section_id']        ?? 0),
+            'section_code'      => $row['section_code']             ?? '',
+            'grade_level'       => $row['grade_level']              ?? '',
+            'section_semester'  => $row['section_semester']         ?? '',
+            'school_year'       => $row['school_year']              ?? '',
 
-            'year_level'       => (int) ($row['year_level']        ?? 1),
-            'subject_count'    => (int) ($row['subject_count']     ?? 0),
+            'year_level'        => (int) ($row['year_level']        ?? 1),
+            'subject_count'     => (int) ($row['subject_count']     ?? 0),
 
-            'enrollment_status'=> $row['student_enrollment_status'] ?? 'enrolled',
-            'enrolled_at'      => $row['enrolled_at']              ?? null,
+            'enrollment_status' => $row['student_enrollment_status'] ?? 'enrolled',
         ];
     }
 
-    // ------------------------------------------------------------
-    // Success response
-    // ------------------------------------------------------------
     echo json_encode([
         'success'  => true,
         'count'    => count($formatted),
@@ -298,10 +318,11 @@ try {
         'offset'   => $offset,
         'search'   => $search,
         'filters'  => [
-            'course_id'  => $courseId,
-            'year_level' => $yearLevel,
-            'section_id' => $sectionId,
-            'status'     => $status,
+            'course_id'   => $courseId,
+            'year_level'  => $yearLevel,
+            'section_id'  => $sectionId,
+            'status'      => $status,
+            'school_year' => $schoolYear,
         ],
         'data'     => $formatted,
         'message'  => 'Search completed successfully'

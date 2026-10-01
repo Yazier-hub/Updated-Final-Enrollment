@@ -6,16 +6,21 @@
 //   • enr_students has NO AUTO_INCREMENT — createFromApplicant() computes
 //     MAX(student_id) + 1 upfront and supplies it in the INSERT
 //   • rgr_subjects uses `code` not `subject_code`
+//   • $timestamps = false — enr_students has NO `updated_at` column
+//   • $fillable includes scholar_id (present in enr_students schema)
 
 require_once 'Model.php';
 
 class Student extends Model {
     protected $table      = 'enr_students';
     protected $primaryKey = 'student_id';
+    protected $timestamps = false;                       // ⭐ IDAGDAG
     protected $fillable = [
-        'applicant_id', 'student_number', 'user_id', 'course_id', 'section_id',
+        'applicant_id', 'student_number', 'user_id', 'scholar_id',
+        'course_id', 'section_id',
         'year_level', 'enrollment_status', 'enrolled_at',
-        'followup_date', 'followup_notes', 'followup_status', 'status'
+        'followup_date', 'followup_notes', 'followup_status', 'status',
+        'archived_at', 'archive_reason', 'archived_by'
     ];
 
     public function __construct() {
@@ -126,10 +131,7 @@ class Student extends Model {
 
             $studentNumber = $this->generateStudentNumber();
 
-            // ============================================================
             // FIX: enr_students has NO AUTO_INCREMENT on student_id.
-            // Compute the next available id manually.
-            // ============================================================
             $idStmt = $this->connection->query(
                 "SELECT COALESCE(MAX(student_id), 0) + 1 AS next_id FROM enr_students"
             );
@@ -144,7 +146,6 @@ class Student extends Model {
             error_log("Student Number: " . $studentNumber);
             error_log("New Student ID: " . $newStudentId);
 
-            // FIX: explicitly supply student_id in the INSERT
             $sql = "INSERT INTO enr_students (
                         student_id,
                         applicant_id,

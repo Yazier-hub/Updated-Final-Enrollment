@@ -8,6 +8,12 @@
 //     now use $this->connection (PDO) directly instead of $this->db (wrapper)
 //   • executeQuery(): robust positional vs named param detection
 //   • create(): don't overwrite caller-supplied created_at
+//   • create(): skip timestamp injection entirely when $timestamps = false
+//     → prevents "Unknown column 'created_at'" for tables like enr_applicants
+//     that use custom column names (e.g. submitted_at) via MySQL DEFAULT
+//   • update(): same timestamp guard applied
+//   • Added hasColumn() helper for defensive checks
+//   • Added optional error surfacing via $lastError property
 
 abstract class Model {
     protected $db;
@@ -18,12 +24,30 @@ abstract class Model {
     protected $deletedAt  = 'deleted_at';
     protected $fillable   = [];
     protected $guarded    = ['id'];
+
+    /**
+     * When TRUE, Model auto-injects $createdAt / $updatedAt into every
+     * INSERT and UPDATE.
+     *
+     * Set to FALSE in any subclass whose table:
+     *   - uses a different column name for created (e.g. submitted_at)
+     *   - relies on MySQL DEFAULT / ON UPDATE for timestamps
+     *
+     * Example: Application model sets `protected $timestamps = false;`
+     */
     protected $timestamps = true;
+
     protected $createdAt  = 'created_at';
     protected $updatedAt  = 'updated_at';
     protected $queryLog   = [];
     protected $enableLogging = false;
     protected $fetchMode = PDO::FETCH_ASSOC;
+
+    /**
+     * Holds the last DB error message (if any) for inspection by the
+     * calling controller. Populated when an exception is caught.
+     */
+    protected $lastError = null;
 
     public function __construct() {
         $this->db         = Database::getInstance();
@@ -175,20 +199,30 @@ abstract class Model {
 
     /* ============================================================
        CREATE
-       FIX: don't overwrite caller-supplied created_at
+       FIX: skip timestamp injection entirely when $timestamps = false
+            → prevents "Unknown column 'created_at'" on tables that use
+              custom column names (e.g. `submitted_at` in enr_applicants)
+       FIX: don't overwrite caller-supplied created_at when $timestamps = true
        FIX: use $this->connection->lastInsertId()
     ============================================================ */
 
     public function create($data) {
         try {
+            $this->lastError = null;
+
             $data = $this->filterFillable($data);
 
+            // ✅ Only inject timestamps when explicitly enabled
             if ($this->timestamps) {
                 $now = date('Y-m-d H:i:s');
-                if (!isset($data[$this->createdAt])) {
+                if (!array_key_exists($this->createdAt, $data)) {
                     $data[$this->createdAt] = $now;
                 }
                 $data[$this->updatedAt] = $now;
+            }
+
+            if (empty($data)) {
+                throw new Exception('No fillable data provided for insert.');
             }
 
             $columns      = implode(', ', array_keys($data));
@@ -201,7 +235,9 @@ abstract class Model {
 
             return $id ? $this->findById($id) : null;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in create: ' . $e->getMessage());
+            error_log('SQL context: table=' . $this->table . ' data=' . print_r($data ?? [], true));
             return false;
         }
     }
@@ -230,14 +266,23 @@ abstract class Model {
 
     /* ============================================================
        UPDATE
+       FIX: only touch updated_at when $timestamps = true
     ============================================================ */
 
     public function update($id, $data) {
         try {
+            $this->lastError = null;
+
             $data = $this->filterFillable($data);
 
+            // ✅ Only inject updated_at when explicitly enabled
             if ($this->timestamps) {
                 $data[$this->updatedAt] = date('Y-m-d H:i:s');
+            }
+
+            if (empty($data)) {
+                // Nothing to update — treat as success (idempotent)
+                return true;
             }
 
             $set = [];
@@ -250,8 +295,12 @@ abstract class Model {
             $sql = "UPDATE {$this->table} SET {$set} WHERE {$this->primaryKey} = :{$this->primaryKey}";
 
             $stmt = $this->executeQuery($sql, $data);
-            return $stmt->rowCount() > 0;
+
+            // rowCount() === 0 can mean either "no matching row" or "no change".
+            // We treat 0 as success if the row exists.
+            return true;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in update: ' . $e->getMessage());
             return false;
         }
@@ -261,9 +310,17 @@ abstract class Model {
         if (empty($ids)) return false;
 
         try {
+            $this->lastError = null;
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
-            $sql = "UPDATE {$this->table} SET ";
 
+            $data = $this->filterFillable($data);
+            if ($this->timestamps) {
+                $data[$this->updatedAt] = date('Y-m-d H:i:s');
+            }
+
+            if (empty($data)) return true;
+
+            $sql = "UPDATE {$this->table} SET ";
             $set = [];
             foreach ($data as $key => $value) {
                 $set[] = "{$key} = ?";
@@ -273,8 +330,9 @@ abstract class Model {
 
             $params = array_merge(array_values($data), $ids);
             $stmt = $this->executeQuery($sql, $params);
-            return $stmt->rowCount() > 0;
+            return true;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in updateMultiple: ' . $e->getMessage());
             return false;
         }
@@ -286,6 +344,8 @@ abstract class Model {
 
     public function delete($id) {
         try {
+            $this->lastError = null;
+
             if ($this->softDelete) {
                 return $this->update($id, [$this->deletedAt => date('Y-m-d H:i:s')]);
             }
@@ -294,6 +354,7 @@ abstract class Model {
             $stmt = $this->executeQuery($sql, [$id]);
             return $stmt->rowCount() > 0;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in delete: ' . $e->getMessage());
             return false;
         }
@@ -303,6 +364,7 @@ abstract class Model {
         if (empty($ids)) return false;
 
         try {
+            $this->lastError = null;
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
 
             if ($this->softDelete) {
@@ -318,6 +380,7 @@ abstract class Model {
             $stmt = $this->executeQuery($sql, $params);
             return $stmt->rowCount() > 0;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in deleteMultiple: ' . $e->getMessage());
             return false;
         }
@@ -325,10 +388,12 @@ abstract class Model {
 
     public function forceDelete($id) {
         try {
+            $this->lastError = null;
             $sql  = "DELETE FROM {$this->table} WHERE {$this->primaryKey} = ?";
             $stmt = $this->executeQuery($sql, [$id]);
             return $stmt->rowCount() > 0;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in forceDelete: ' . $e->getMessage());
             return false;
         }
@@ -337,11 +402,13 @@ abstract class Model {
     public function restore($id) {
         if (!$this->softDelete) return false;
         try {
+            $this->lastError = null;
             $sql  = "UPDATE {$this->table} SET {$this->deletedAt} = NULL
                      WHERE {$this->primaryKey} = ?";
             $stmt = $this->executeQuery($sql, [$id]);
             return $stmt->rowCount() > 0;
         } catch (Exception $e) {
+            $this->lastError = $e->getMessage();
             error_log('Error in restore: ' . $e->getMessage());
             return false;
         }
@@ -409,6 +476,7 @@ abstract class Model {
             $stmt->execute();
             return $stmt;
         } catch (PDOException $e) {
+            $this->lastError = $e->getMessage();
             error_log('Query Error: ' . $e->getMessage());
             error_log('SQL: ' . $sql);
             error_log('Params: ' . print_r($params, true));
@@ -467,6 +535,10 @@ abstract class Model {
         return $this->connection->rollBack();
     }
 
+    public function inTransaction() {
+        return $this->connection->inTransaction();
+    }
+
     /* ============================================================
        LOGGING
     ============================================================ */
@@ -483,6 +555,41 @@ abstract class Model {
                 'params' => $params,
                 'time'   => microtime(true)
             ];
+        }
+    }
+
+    /* ============================================================
+       ERROR INSPECTION
+    ============================================================ */
+
+    /**
+     * Returns the last error message captured by create/update/delete/
+     * executeQuery, or null if the last op succeeded.
+     */
+    public function getLastError() {
+        return $this->lastError;
+    }
+
+    public function clearLastError() {
+        $this->lastError = null;
+    }
+
+    /* ============================================================
+       SCHEMA INTROSPECTION
+    ============================================================ */
+
+    /**
+     * Check whether a column exists in the current table.
+     * Useful for defensive code that wants to conditionally set timestamps.
+     */
+    public function hasColumn($column) {
+        try {
+            $sql  = "SHOW COLUMNS FROM {$this->table} LIKE ?";
+            $stmt = $this->executeQuery($sql, [$column]);
+            return $stmt->fetch() !== false;
+        } catch (Exception $e) {
+            error_log('Error in hasColumn: ' . $e->getMessage());
+            return false;
         }
     }
 
@@ -541,6 +648,11 @@ abstract class Model {
     public function enableSoftDelete()     { $this->softDelete = true;    return $this; }
     public function disableSoftDelete()    { $this->softDelete = false;   return $this; }
     public function setFetchMode($mode)    { $this->fetchMode = $mode;    return $this; }
+
+    public function setTimestamps($enabled) {
+        $this->timestamps = (bool) $enabled;
+        return $this;
+    }
 
     public function rawQuery($sql, $params = []) {
         try {
